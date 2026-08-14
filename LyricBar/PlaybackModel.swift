@@ -70,7 +70,17 @@ final class PlaybackModel {
         maxChars = [40, 48, 60, 80].contains(storedWidth) ? storedWidth : 48
         let storedTick = UserDefaults.standard.double(forKey: Keys.tick)
         tickInterval = [0.2, 0.5, 1.0].contains(storedTick) ? storedTick : 0.5
-        start()
+        if !Self.isRunningTests { start() }
+    }
+
+    /// The unit tests are hosted by this app, so `xcodebuild test` launches it.
+    /// Starting the poll loop there would fire Apple Events at Spotify/Music from
+    /// a test run — prompting for Automation permission and making results depend
+    /// on whatever happens to be playing. The tests cover the pure logic instead,
+    /// so the loop simply stays off.
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
     }
 
     // MARK: Poll loop

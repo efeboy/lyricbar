@@ -68,17 +68,29 @@ final class LRCLibClient: Sendable {
         case .retry(let sec): return .retry(after: sec)
         case .failed: return .unavailable
         case .ok(let results):
-            let candidates = results.filter { $0.syncedLyrics?.isEmpty == false }
-            let best = candidates.min {
-                abs(($0.duration ?? 0) - duration) < abs(($1.duration ?? 0) - duration)
-            }
-            // Reject matches more than 5s off - likely a different edit entirely,
-            // and wrong-length lyrics drift badly against playback.
-            if let b = best, abs((b.duration ?? 0) - duration) <= 5, let l = usable(b) {
+            if let b = Self.bestMatch(among: results, duration: duration), let l = usable(b) {
                 return .synced(l)
             }
             return .unavailable
         }
+    }
+
+    /// How far a search hit's duration may sit from the playing track and still
+    /// count as the same recording. Beyond this it is likely a different edit
+    /// entirely, and wrong-length lyrics drift badly against playback.
+    static let durationTolerance: Double = 5
+
+    /// Picks the search candidate whose duration is closest to the playing track,
+    /// rejecting anything outside `durationTolerance`.
+    ///
+    /// Split out of `fetch` and kept pure so it can be tested without touching the
+    /// network: the matching, not the transport, is where this goes wrong.
+    static func bestMatch(among results: [LRCLibTrack], duration: Double) -> LRCLibTrack? {
+        let candidates = results.filter { $0.syncedLyrics?.isEmpty == false }
+        guard let best = candidates.min(by: {
+            abs(($0.duration ?? 0) - duration) < abs(($1.duration ?? 0) - duration)
+        }) else { return nil }
+        return abs((best.duration ?? 0) - duration) <= durationTolerance ? best : nil
     }
 
     private func usable(_ t: LRCLibTrack) -> [LyricLine]? {
