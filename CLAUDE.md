@@ -6,27 +6,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LyricBar is a macOS menu bar app that shows time-synced lyrics for whatever
 **Spotify or Apple Music** is currently playing. It is a SwiftUI `MenuBarExtra`
-app with no third-party dependencies. Sources live under `App/`; the app is built
-from a standard Xcode **macOS App target** (not SwiftPM — an app bundle is
-required for `MenuBarExtra` and `SMAppService`).
+app with no third-party dependencies. Sources live under `LyricBar/`; the app is
+built from `LyricBar.xcodeproj`, a standard Xcode **macOS App target** (not SwiftPM
+— an app bundle is required for `MenuBarExtra` and `SMAppService`).
 
 ## Build, install, run
 
-Open the Xcode project and build/run the **LyricBar** app target (⌘R). There is
+`open LyricBar.xcodeproj`, then build/run the **LyricBar** scheme (⌘R). There is
 no `swift build` step and no `launchctl`/`codesign` deploy dance anymore — that
 was the old bare-executable design and it is gone.
 
-First-run requirements (see `App/SETUP.md` for the full target setup):
+The target is already configured this way; each of these is load-bearing, so
+don't "clean them up":
 
 - Deployment target **macOS 14.0** (`MenuBarExtra`/`SMAppService` are 13+, but the
   `@Observable` model requires 14).
 - Bundle identifier **`net.local.lyricbar`** — `SMAppService.mainApp` keys off it.
-- **Hardened Runtime on**, **App Sandbox off**, entitlements at
-  `App/LyricBar.entitlements` (sending Apple Events to Spotify/Music is
-  incompatible with the sandbox without discouraged temporary exceptions).
-- `Info.plist` must carry `LSUIElement` (menu-bar-only, no Dock) and
-  `NSAppleEventsUsageDescription` (without it the Automation prompt never appears
-  and lyrics silently never load).
+- **Hardened Runtime on**, **App Sandbox off** (`ENABLE_APP_SANDBOX = NO`),
+  entitlements at `LyricBar/LyricBar.entitlements` (sending Apple Events to
+  Spotify/Music is incompatible with the sandbox without discouraged temporary
+  exceptions).
+- **No `Info.plist` file.** Xcode generates it from `INFOPLIST_KEY_*` build
+  settings. `INFOPLIST_KEY_LSUIElement = YES` keeps the app out of the Dock and
+  app switcher, and `INFOPLIST_KEY_NSAppleEventsUsageDescription` supplies the
+  Automation prompt string — without that string the prompt never appears and
+  lyrics silently never load.
+- `LyricBar/` is a **synchronized folder group** (Xcode 16+): files on disk are
+  in the target automatically. Add a `.swift` file to the folder and it compiles;
+  there is no pbxproj membership to edit. Keep non-source files (docs, notes) out
+  of that folder so they aren't swept into the bundle.
+- **Swift 6 language mode**, but deliberately *without* Xcode's newer
+  `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` and `SWIFT_APPROACHABLE_CONCURRENCY`
+  defaults. Either one would pull `LRCLibClient` onto the main actor and run its
+  JSON decoding there, quietly undoing the off-main-actor design below.
 
 "Open at login" is a menu toggle backed by `SMAppService.mainApp`; the system
 tracks it under System Settings → General → Login Items. Quitting no longer has to
@@ -34,10 +46,20 @@ disable it (there is no `KeepAlive` to fight).
 
 ## Tests
 
-There is no test target. The pure logic — `LRCParser`, `LRCParser.index(at:)`,
-and the LRCLIB duration-matching — can be verified by compiling those files into a
-standalone `swiftc` file with a `main` block, without launching the app or
-touching Spotify/Music.
+`LyricBarTests` is a Swift Testing bundle covering the pure logic: `LRCParser`,
+`LRCParser.index(at:)`, and `LRCLibClient.bestMatch(among:duration:)` — the LRCLIB
+duration matching, split out of `fetch` precisely so it can be tested without the
+network.
+
+```sh
+xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
+```
+
+It is a **hosted** bundle (`TEST_HOST` is the app), so `test` launches LyricBar.
+`PlaybackModel.isRunningTests` detects that and skips `start()`, so a test run
+never fires Apple Events at Spotify/Music — otherwise tests would prompt for
+Automation and depend on whatever happens to be playing. If you ever add tests
+that need the loop running, drive it explicitly rather than removing that guard.
 
 A clean build proves nothing about whether the menu bar item renders or whether
 Automation permission was granted. Verify UI-adjacent behavior by running the app
@@ -54,7 +76,7 @@ Task.sleep(tick) → pickActive(): Spotify | Music (AppleScript) → track chang
         player position ──────────────────────→ LRCParser.index(at:) → lineText
 ```
 
-Files under `App/`:
+Files under `LyricBar/`:
 
 - **`Playback/NowPlaying.swift`** — `PlaybackBridge` protocol + the normalized
   `NowPlaying` snapshot every source resolves to (`PlaybackSource`, `PlayerState`).
