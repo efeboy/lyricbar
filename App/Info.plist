@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Menu-bar-only agent: no Dock icon, no app switcher entry. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- Shown in the macOS Automation permission prompt the first time the app
+         reads Spotify / Music. Without this string the prompt (and thus all
+         lyrics) silently never appears. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>LyricBar reads the currently playing track from Spotify and Apple Music to display time-synced lyrics.</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+
+    <key>CFBundleName</key>
+    <string>LyricBar</string>
+    <key>CFBundleDisplayName</key>
+    <string>LyricBar</string>
+</dict>
+</plist>
