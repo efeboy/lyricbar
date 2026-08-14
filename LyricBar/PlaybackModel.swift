@@ -203,17 +203,22 @@ final class PlaybackModel {
                 if Task.isCancelled { return }
                 guard id == self.currentTrackID else { return }   // track moved on
 
+                // A fetch that lands while paused still stores its lines so they
+                // are ready on resume, but must not touch the header/lineText —
+                // that would clobber the "Paused" header the toggle just set.
                 switch result {
                 case .synced(let l):
                     self.lines = l
                     self.shownIndex = -1
-                    self.header = "\(title) — \(artist)"
+                    if !self.isPaused { self.header = "\(title) — \(artist)" }
                     return
                 case .unavailable:
                     self.lines = []
                     self.shownIndex = -1
-                    self.lineText = ""
-                    self.header = "No synced lyrics found"
+                    if !self.isPaused {
+                        self.lineText = ""
+                        self.header = "No synced lyrics found"
+                    }
                     return
                 case .retry(let after):
                     // Server is shedding load; back off, then retry this track.
@@ -231,11 +236,19 @@ final class PlaybackModel {
             lineText = ""
             header = "Paused"
         } else {
-            // Force an immediate re-probe and redraw on resume.
+            // Pausing overwrote the header with "Paused". The track hasn't
+            // changed, so tick()'s track-change branch won't rebuild it — restore
+            // it now from the last snapshot so the menu doesn't read "Paused"
+            // while lyrics scroll. Then drop the snapshot to force an immediate
+            // re-probe and redraw, which also corrects the header if the track
+            // changed while paused.
             shownIndex = -1
-            lastSnapshot = nil
             lastPosition = nil
             lastPositionAt = nil
+            if let snap = lastSnapshot {
+                header = "\(snap.title) — \(snap.artist)"
+            }
+            lastSnapshot = nil
         }
     }
 
