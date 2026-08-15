@@ -40,16 +40,24 @@ don't "clean them up":
   defaults. Either one would pull `LRCLibClient` onto the main actor and run its
   JSON decoding there, quietly undoing the off-main-actor design below.
 
-"Open at login" is a menu toggle backed by `SMAppService.mainApp`; the system
-tracks it under System Settings → General → Login Items. Quitting no longer has to
+"Open at login" is a toggle in the popover's options pull-down, backed by
+`SMAppService.mainApp`; the system tracks it under System Settings → General →
+Login Items. Quitting no longer has to
 disable it (there is no `KeepAlive` to fight).
 
 ## Tests
 
 `LyricBarTests` is a Swift Testing bundle covering the pure logic: `LRCParser`,
-`LRCParser.index(at:)`, and `LRCLibClient.bestMatch(among:duration:)` — the LRCLIB
+`LRCParser.index(at:)`, `LRCLibClient.bestMatch(among:duration:)` — the LRCLIB
 duration matching, split out of `fetch` precisely so it can be tested without the
-network.
+network — and `LyricReflow` (where a long line breaks, and when each chunk swaps).
+`MenuBarBoxTests` renders `LyricLabel` in an `NSHostingView` and asserts the box is
+one width across every state — the shift regression, pinned.
+
+`LyricReflowTests` injects its own `measure` closure (1pt per character) instead
+of calling into the system font. Real metrics would make the expected splits
+drift with the OS version, and none of the logic under test cares where the
+widths come from.
 
 ```sh
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
@@ -72,9 +80,20 @@ Data flows one way each tick, driven by a single async loop in `PlaybackModel`:
 ```
 Task.sleep(tick) → pickActive(): Spotify | Music (AppleScript) → track changed?
                                               → LRCLibClient.fetch (async, per track)
-                                              → LRCParser.parse → [LyricLine]
-        player position ──────────────────────→ LRCParser.index(at:) → lineText
+                                              → LRCParser.parse → [LyricLine] ──┐
+                                                                                │
+        lines      ──→ popover triplet (previous / current / next) ←─────────────┤
+        menuLines  ──→ LyricReflow.expand(width:) ──→ menu bar item ←────────────┘
+
+        player position ──→ LRCParser.index(at:) → lineText / currentLine
 ```
+
+The parsed lines are kept twice on purpose. `lines` is the original timing and is
+what the popover shows; `menuLines` is the same track re-split to whatever fits
+the current menu bar width. Both are plain `[LyricLine]`, so `index(at:)` searches
+them identically — the reflow adds timestamps, it does not introduce a second
+lookup path. Changing the width preference or the screen layout rebuilds only
+`menuLines`.
 
 Files under `LyricBar/`:
 
@@ -84,13 +103,17 @@ Files under `LyricBar/`:
   two precompiled `NSAppleScript` objects (metadata snapshot, playback position).
 - **`Lyrics/LRCParser.swift`** — turns `[mm:ss.xx]` tags into sorted `LyricLine`s;
   `index(at:)` binary-searches the active line.
+- **`Lyrics/LyricReflow.swift`** — splits lines too wide for the menu bar across
+  their own time window, and hands each chunk a timestamp.
+- **`MenuBarMetrics.swift`** — text measurement, the `LyricWidth` bands, and the
+  fixed box derived from `NSScreen.auxiliaryTopRightArea` on `menuBarScreen`.
 - **`Lyrics/LRCLibClient.swift`** — `LRCLibClient` (`Sendable`, runs off the main
   actor).
 - **`LoginItem.swift`** — thin `SMAppService.mainApp` wrapper for the login toggle.
 - **`PlaybackModel.swift`** — `@MainActor @Observable`; owns the poll loop, source
   selection, position extrapolation, and the per-track fetch task.
-- **`LyricBarApp.swift`** — the `MenuBarExtra` scene; the label (icon + truncated
-  lyric) and the SwiftUI menu.
+- **`LyricBarApp.swift`** — the `MenuBarExtra` scene: the label (icon + lyric), the
+  popover, and the options pull-down.
 
 ### Source selection
 
@@ -123,14 +146,76 @@ or `rewinding`; `MusicBridge` collapses those to `playing` in-script so the shar
 `PlayerState` enum stays small. Use `persistent ID` for the track identity — it is
 stable across launches (Spotify uses `id`).
 
-**The menu bar item must always keep its icon.** The `quote.bubble` image is the
-always-present, always-clickable anchor for the menu; only the lyric text beside it
-varies. An empty lyric shows the icon alone, never a zero-width item.
+**The menu bar item must always keep its icon.** The `quote.closing` image is the
+always-present, always-clickable anchor for the popover; only the lyric text beside
+it varies. An empty lyric shows the icon alone, never a zero-width item.
 
-**Width is pinned so neighbours don't shift.** The lyric `Text` truncates natively
-(`.lineLimit(1).truncationMode(.tail)`) inside a fixed `frame(maxWidth:)` derived
-from the chosen character count. There is no scrolling marquee — macOS has no menu
-bar API for one, and it was dropped in the SwiftUI rewrite.
+**The menu bar item is ONE FIXED BOX.** `model.boxWidth` is pinned on the OUTER
+container and the icon and lyric are laid out inside it:
+
+```
+┌──────────────────── boxWidth ────────────────────┐
+│ [icon 18] gap 4 │ ─────── lyricWidth ─────────── │
+└──────────────────────────────────────────────────┘
+```
+
+Pinning the outer frame rather than the inner `Text` is load-bearing. Sizing the
+`Text` and letting the `HStack` add itself up leaves the total at the mercy of the
+symbol's own metrics; pinning the container makes the width independent of what
+the icon and text each report. The `Text` is rendered even when empty, so every
+state occupies the same width and the item never pushes other status items out of
+reach. `maxWidth` would size to the current line and make the whole menu bar
+twitch on every lyric. The states are told apart by `DisplayState.opacity`.
+
+`MenuBarBoxTests` measures `NSHostingView(...).fittingSize` across all five states
+and asserts one distinct width. `LyricLabel` therefore takes plain values, not the
+model — that is what lets a test drive every state.
+
+The width comes from a `LyricWidth` preference (Compact / Standard / Wide) clamped
+down by `MenuBarMetrics.availableTextWidth`, which reads
+`NSScreen.auxiliaryTopRightArea` — on a notched Mac exactly the strip right of the
+notch, which is where status items live — and reserves room for other items. The
+preference can only be reduced, never raised, by the display.
+
+**Resolve geometry against `MenuBarMetrics.menuBarScreen`, never `NSScreen.main`.**
+`.main` is the screen with the *key window*, so it follows whichever app the user
+focuses; on a multi-display setup it flips between displays of different widths and
+the box silently resizes. That was a real shipped bug. The menu bar lives on
+`NSScreen.screens.first`.
+
+`MenuBarExtra` does not expose its `NSStatusItem`, so the item's actual origin is
+unknowable — don't write geometry that needs it.
+
+**The budget is points, not characters.** In the menu bar font a character spans
+3.47pt ("i") to 12.85pt ("W") — a factor of 3.7. A character budget sized for
+average text lets a capital-heavy line overrun the fixed box; sized for the worst
+case it wastes most of the bar. `MenuBarMetrics.typicalCharacters` reports a count
+for the Width menu, and is a readout only — never a layout input.
+
+There is no scrolling marquee — macOS has no menu bar API for one, and it was
+dropped in the SwiftUI rewrite. Long lines are split by `LyricReflow` instead of
+truncated, which is why the width is a hard budget rather than a hint.
+
+**The scene is `.menuBarExtraStyle(.window)`, and that has consequences.** The
+`.menu` style would give menu rows for free but cannot show the track header and
+the previous/current/next triplet, so the popover is a `.window`. The cost is that
+`MenuBarExtra` then has **no right-click menu** — both mouse buttons open the
+popover, and SwiftUI exposes no secondary-menu hook. Settings and Quit therefore
+live in an ellipsis `Menu` inside the popover header, which AppKit still renders
+as a real NSMenu. Getting true right-click would mean a hand-rolled `NSStatusItem`;
+don't reintroduce one for that alone.
+
+**The popover shows the song and its lyrics, nothing else.** No transport, no
+seek, no progress — this is a lyrics-only tool and the bridges are read-only by
+design. Anything that is not a lyric belongs in the pull-down.
+
+**A split plan is ranked by chunk count first**, then break quality, then even
+widths. Ranking by balance first looks reasonable and is wrong: narrower chunks
+each sit closer to half the budget, so the sum of deviations keeps falling as you
+split further, and a two-way break loses to a three-way one. Every extra chunk
+shortens the window each is on screen for, and a tidier break is no help if the
+text flashes past. `LyricReflow.minChunkDuration` is the floor below which the
+line is left whole and truncated instead.
 
 **Automation permission gates everything.** macOS prompts once per controlled app
 (Spotify, Music). Denied, the app runs and shows no lyrics. The TCC database needs
@@ -170,7 +255,8 @@ state.
 
 ## Conventions
 
-Tuning lives near its use (poll `tickInterval`, the `maxChars` width budget). The
+Tuning lives near its use (poll `tickInterval`, the `LyricWidth` bands and
+`otherItemsReserve` in `MenuBarMetrics`, `LyricReflow.minChunkDuration`). The
 comments explaining *why* a constraint exists are load-bearing — several encode
 bugs that cost significant debugging. Preserve them when editing nearby code.
 
