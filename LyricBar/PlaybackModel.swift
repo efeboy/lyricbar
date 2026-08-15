@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreGraphics
 import Observation
 
@@ -20,9 +21,9 @@ import Observation
 @Observable
 final class PlaybackModel {
 
-    // MARK: Published, read by the menu bar
+    // MARK: Published, read by the menu bar and the popover
 
-    /// The lyric line (or a placeholder) shown next to the icon. Empty => icon only.
+    /// The lyric chunk (or a placeholder) shown next to the icon. May be empty.
     private(set) var lineText: String = ""
     /// Menu header: what is playing, or why nothing shows. Never lyric text.
     private(set) var header: String = "Starting…"
@@ -31,14 +32,49 @@ final class PlaybackModel {
     /// Whether lyric updates are paused.
     private(set) var isPaused: Bool = false
 
-    /// Character budget for the menu bar; the label truncates natively to fit.
-    private(set) var maxChars: Int
+    /// What the item is currently conveying. Drives the label's opacity so the
+    /// three "nothing to show" cases are distinguishable — previously they all
+    /// rendered as a bare icon and looked identical.
+    private(set) var displayState: DisplayState = .idle
+
+    /// Popover fields. The bridges expose no artwork, so there is no art here.
+    private(set) var trackTitle: String = "Nothing playing"
+    private(set) var trackArtist: String = ""
+    private(set) var trackSubtitle: String = ""
+    /// Surrounding context for the popover, taken from the *unsplit* lines —
+    /// the popover has room to wrap, so it never shows a half line.
+    private(set) var previousLine: String = ""
+    private(set) var currentLine: String = ""
+    private(set) var nextLine: String = ""
+
+    /// Chosen width band.
+    private(set) var widthPreference: LyricWidth
     /// Poll interval in seconds.
     private(set) var tickInterval: Double
 
-    /// Reserved width for the lyric text, from the chosen character count at the
-    /// menu bar font's rough average width per character.
-    var menuWidth: CGFloat { CGFloat(maxChars) * 7.0 }
+    /// Width reserved for the lyric text. Held constant across every state so the
+    /// item never resizes and neighbouring status items never shift.
+    /// The lyric text area inside the box.
+    private(set) var lyricWidth: CGFloat = LyricWidth.standard.points
+
+    /// The whole fixed menu bar box — icon, gap and lyric area. The view pins
+    /// this and nothing else; every state renders at exactly this width.
+    private(set) var boxWidth: CGFloat =
+        MenuBarMetrics.iconWidth + MenuBarMetrics.iconGap + LyricWidth.standard.points
+
+    enum DisplayState {
+        case playing, instrumental, noLyrics, paused, idle
+
+        /// Full strength when there is something to read; dimmed when the item is
+        /// only reporting that there is not.
+        var opacity: Double {
+            switch self {
+            case .playing, .instrumental, .noLyrics: 1.0
+            case .paused:                            0.55
+            case .idle:                              0.30
+            }
+        }
+    }
 
     // MARK: Internals (not part of the observable UI surface)
 
@@ -46,9 +82,15 @@ final class PlaybackModel {
     @ObservationIgnored private let lrclib = LRCLibClient()
 
     @ObservationIgnored private var activeBridge: PlaybackBridge?
+    /// Lines exactly as parsed — what the popover shows.
     @ObservationIgnored private var lines: [LyricLine] = []
+    /// The same lines with over-wide ones split to fit `lyricWidth` — what the
+    /// menu bar shows. Rebuilt whenever the width changes.
+    @ObservationIgnored private var menuLines: [LyricLine] = []
+    @ObservationIgnored private var trackDuration: Double = 0
     @ObservationIgnored private var currentTrackID: String?
-    @ObservationIgnored private var shownIndex = -1
+    @ObservationIgnored private var shownMenuIndex = -1
+    @ObservationIgnored private var shownLyricIndex = -2
 
     @ObservationIgnored private var lastSnapshot: NowPlaying?
     @ObservationIgnored private var lastPosition: Double?
@@ -57,20 +99,28 @@ final class PlaybackModel {
 
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
+    @ObservationIgnored private var screenObserver: (any NSObjectProtocol)?
 
     private var gapPlaceholder: String { "♪" }
 
     private enum Keys {
-        static let width = "maxChars"
+        static let width = "lyricWidth"
         static let tick = "tickInterval"
     }
 
     init() {
-        let storedWidth = UserDefaults.standard.integer(forKey: Keys.width)
-        maxChars = [40, 48, 60, 80].contains(storedWidth) ? storedWidth : 48
+        let storedWidth = UserDefaults.standard.string(forKey: Keys.width) ?? ""
+        widthPreference = LyricWidth(rawValue: storedWidth) ?? .standard
         let storedTick = UserDefaults.standard.double(forKey: Keys.tick)
         tickInterval = [0.2, 0.5, 1.0].contains(storedTick) ? storedTick : 0.5
-        if !Self.isRunningTests { start() }
+
+        lyricWidth = MenuBarMetrics.textWidth(widthPreference)
+        boxWidth = MenuBarMetrics.boxWidth(widthPreference)
+
+        if !Self.isRunningTests {
+            observeScreenChanges()
+            start()
+        }
     }
 
     /// The unit tests are hosted by this app, so `xcodebuild test` launches it.
@@ -81,6 +131,35 @@ final class PlaybackModel {
     private static var isRunningTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || NSClassFromString("XCTestCase") != nil
+    }
+
+    // MARK: Width
+    //
+    // Recomputed on display/scaling change and on preference change only — never
+    // per line. Auto-sizing per line would shove every neighbouring status item
+    // sideways: line-to-line width change averages 67pt and reaches 404pt.
+
+    private func observeScreenChanges() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshWidth() }
+        }
+    }
+
+    private func refreshWidth() {
+        let resolved = MenuBarMetrics.textWidth(widthPreference)
+        guard resolved != lyricWidth else { return }
+        lyricWidth = resolved
+        boxWidth = MenuBarMetrics.boxWidth(widthPreference)
+        rebuildMenuLines()
+    }
+
+    /// Re-split the parsed lines for the current width.
+    private func rebuildMenuLines() {
+        menuLines = LyricReflow.expand(lines, trackDuration: trackDuration, width: lyricWidth)
+        shownMenuIndex = -1
     }
 
     // MARK: Poll loop
@@ -116,23 +195,41 @@ final class PlaybackModel {
             currentTrackID = nil
             clear()
             header = "Nothing playing"
+            trackTitle = "Nothing playing"
+            trackArtist = ""
+            trackSubtitle = ""
+            displayState = .idle
             return
         }
 
         if snap.trackID != currentTrackID {
             currentTrackID = snap.trackID
             clear()
+            trackDuration = snap.durationSeconds
             header = "\(snap.title) — \(snap.artist)"
+            trackTitle = snap.title
+            trackArtist = snap.artist
+            trackSubtitle = snap.album.isEmpty
+                ? snap.source.rawValue
+                : "\(snap.album) · \(snap.source.rawValue)"
             loadLyrics(for: snap)
             return
         }
 
-        // Paused, or no synced lyrics: nothing can change on the fine tick, so
-        // skip the position round-trip. Also drop the extrapolation base so a
-        // later resume doesn't briefly extrapolate across the paused gap.
-        guard snap.state == .playing, !lines.isEmpty else {
+        guard snap.state == .playing else {
+            // Paused: nothing can change, so skip the position round-trip. Also
+            // drop the extrapolation base so a later resume doesn't briefly
+            // extrapolate across the paused gap.
             lastPosition = nil
             lastPositionAt = nil
+            displayState = .paused
+            return
+        }
+
+        guard !lines.isEmpty else {
+            lastPosition = nil
+            lastPositionAt = nil
+            displayState = .noLyrics
             return
         }
 
@@ -149,17 +246,36 @@ final class PlaybackModel {
             return
         }
 
-        // Instrumental gaps (the intro, or a bare-timestamp line) show a steady
-        // placeholder rather than an empty title, so the item keeps its width.
-        guard let idx = LRCParser.index(at: pos, in: lines) else {
-            if shownIndex != -1 { shownIndex = -1; lineText = gapPlaceholder }
+        updateMenuLine(at: pos)
+        updatePopoverLines(at: pos)
+    }
+
+    /// Instrumental gaps (the intro, or a bare-timestamp line) show a steady
+    /// placeholder rather than an empty title, so the item keeps its width.
+    private func updateMenuLine(at pos: Double) {
+        guard let idx = LRCParser.index(at: pos, in: menuLines) else {
+            if shownMenuIndex != -1 {
+                shownMenuIndex = -1
+                lineText = gapPlaceholder
+                displayState = .instrumental
+            }
             return
         }
-        if idx != shownIndex {
-            shownIndex = idx
-            let text = lines[idx].text
+        if idx != shownMenuIndex {
+            shownMenuIndex = idx
+            let text = menuLines[idx].text
             lineText = text.isEmpty ? gapPlaceholder : text
+            displayState = text.isEmpty ? .instrumental : .playing
         }
+    }
+
+    private func updatePopoverLines(at pos: Double) {
+        let idx = LRCParser.index(at: pos, in: lines) ?? -1
+        guard idx != shownLyricIndex else { return }
+        shownLyricIndex = idx
+        previousLine = idx > 0 ? lines[idx - 1].text : ""
+        currentLine = idx >= 0 ? lines[idx].text : ""
+        nextLine = (idx >= 0 && idx + 1 < lines.count) ? lines[idx + 1].text : ""
     }
 
     /// Prefer a source that is actively playing; fall back to a paused one so a
@@ -176,10 +292,15 @@ final class PlaybackModel {
 
     private func clear() {
         lines = []
+        menuLines = []
         lastPosition = nil
         lastPositionAt = nil
-        shownIndex = -1
+        shownMenuIndex = -1
+        shownLyricIndex = -2
         lineText = ""
+        previousLine = ""
+        currentLine = ""
+        nextLine = ""
     }
 
     // MARK: Lyric fetch
@@ -209,15 +330,18 @@ final class PlaybackModel {
                 switch result {
                 case .synced(let l):
                     self.lines = l
-                    self.shownIndex = -1
+                    self.rebuildMenuLines()
+                    self.shownLyricIndex = -2
                     if !self.isPaused { self.header = "\(title) — \(artist)" }
                     return
                 case .unavailable:
                     self.lines = []
-                    self.shownIndex = -1
+                    self.menuLines = []
+                    self.shownMenuIndex = -1
                     if !self.isPaused {
                         self.lineText = ""
                         self.header = "No synced lyrics found"
+                        self.displayState = .noLyrics
                     }
                     return
                 case .retry(let after):
@@ -235,6 +359,7 @@ final class PlaybackModel {
         if isPaused {
             lineText = ""
             header = "Paused"
+            displayState = .paused
         } else {
             // Pausing overwrote the header with "Paused". The track hasn't
             // changed, so tick()'s track-change branch won't rebuild it — restore
@@ -242,7 +367,8 @@ final class PlaybackModel {
             // while lyrics scroll. Then drop the snapshot to force an immediate
             // re-probe and redraw, which also corrects the header if the track
             // changed while paused.
-            shownIndex = -1
+            shownMenuIndex = -1
+            shownLyricIndex = -2
             lastPosition = nil
             lastPositionAt = nil
             if let snap = lastSnapshot {
@@ -252,9 +378,12 @@ final class PlaybackModel {
         }
     }
 
-    func setMaxChars(_ n: Int) {
-        maxChars = n
-        UserDefaults.standard.set(n, forKey: Keys.width)
+    func setWidth(_ w: LyricWidth) {
+        widthPreference = w
+        UserDefaults.standard.set(w.rawValue, forKey: Keys.width)
+        lyricWidth = MenuBarMetrics.textWidth(w)
+        boxWidth = MenuBarMetrics.boxWidth(w)
+        rebuildMenuLines()
     }
 
     func setTickInterval(_ v: Double) {
