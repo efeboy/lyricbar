@@ -156,12 +156,18 @@ position leap. Timing that measures *elapsed* time must be monotonic.
 
 ## The menu bar item
 
-### It is ONE FIXED BOX, holding nothing but the lyric, centered
+### It is ONE FIXED BOX *while there is a lyric* — and collapses when there isn't
 
 ```
-┌──────────────────── boxWidth ────────────────────┐
+playing / instrumental gap:
+┌──────────────────── lyricBoxWidth ───────────────┐
 │              ──── centered lyric ────            │
 └──────────────────────────────────────────────────┘
+
+idle / no lyrics found / paused:
+┌── 32pt ──┐
+│    ♪     │
+└──────────┘
         item on screen = boxWidth + 16pt system padding
 ```
 
@@ -170,6 +176,24 @@ fixed: left-aligned text starts at the same edge every line and ends somewhere
 new, so the block still reads as shifting. Centered, all lines share a midpoint.
 The states are told apart by `DisplayState.opacity`, baked into the image's alpha
 because a template image uses alpha as its tint mask.
+
+**The collapse is not a weakening of the fixed box — read `DisplayState.holdsLyric`
+before touching it.** The box exists to stop *line-to-line* jitter, and it still
+does: it never changes while lyrics are playing. But holding 200-odd points open
+around a 30%-opacity `♪` does not read as "nothing playing", it reads as broken
+empty menu bar — that is exactly what prompted a bug report of "it vanished from
+the taskbar". So the width switches on *state transitions*, of which there are a
+handful per track, never per line.
+
+`.instrumental` deliberately **keeps** the full box. Intros, outros and
+bare-timestamp gaps happen mid-song, so collapsing on them would flicker the item
+during playback, which is the very thing the fixed box exists to prevent. Only
+`.idle`, `.noLyrics` and `.paused` collapse — all of which last for a track or
+longer. If you add a `DisplayState` case, decide which side of that line it is on.
+
+The placeholder width comes from `MenuBarMetrics.placeholderBoxWidth(for:)`, with
+a `minimumPlaceholderWidth` floor so the item stays comfortably clickable — the
+popover is only reachable through it.
 
 ### `MenuBarExtra` IGNORES a frame pinned on its label — the lyric must be an image
 
@@ -288,8 +312,14 @@ optional:
   re-running a whole calibration for a few points would resize the item in front
   of the user for no gain, since 8pt is the search resolution anyway.
 - **`recalibrationCooldown` is 30s**, and the check is suppressed entirely while
-  `isCalibrating` (the calibration drives `boxWidth` itself, so its own probes
-  would otherwise read as drift).
+  `isCalibrating` or while `probeWidth` is set (the calibration drives the width
+  itself, so its own probes would otherwise read as drift).
+- **Drift acts in one direction only.** Being squeezed (`maxX` moved left, another
+  item appeared) recalibrates, because continuing to crowd a neighbour is a real
+  fault. Room *freeing up* does not: it only invalidates the cache so the next
+  launch picks the extra width up. Growing mid-session is a cosmetic gain paid for
+  with a visible resize, and a width that changes under the user while they are
+  reading is the complaint this whole subsystem started from.
 
 `MenuBarExtra` does not expose its `NSStatusItem`, so the item's *position among
 other apps' items* is not controllable — don't write geometry that needs it.
@@ -327,12 +357,20 @@ measurement follows the platform instead of assuming. This also means the older
 corpus coverage figures below were measured against the semibold font and are
 indicative, not exact.
 
-The width comes from a `LyricWidth` preference (Compact / Standard / Wide / Fit
-Menu Bar) clamped down by the measured fit. The preference can only be reduced,
-never raised, by the display. `.fill` is expressed as `points = .infinity` so the
-clamp is the only place a width is ever decided. `boxWidth` is also the reflow
-budget — with no icon slot the box and the text area are one span, so there is
-deliberately only one number.
+**The `LyricWidth` bands are shares of the measured fit, not absolute points.**
+They were absolute (120 / 280 / 360 / ∞, clamped down by the fit) and that is a
+trap on a crowded menu bar: with the fit at 254pt, Standard, Wide and Fit Menu Bar
+*all* clamped to 254, so the menu offered four choices and three of them did
+nothing. Shares (0.45 / 0.65 / 0.82 / 1.0) are guaranteed distinct and ordered on
+any display, which is the whole point of a control that adapts to the device.
+`bandsStayDistinct` in `MenuBarBoxTests` pins that; don't reintroduce absolute
+points without it failing.
+
+`lyricBoxWidth` is also the reflow budget — with no icon slot the box and the text
+area are one span, so there is deliberately only one number. Note that
+`rebuildMenuLines` must use `lyricBoxWidth` and never `boxWidth`: the latter is
+the placeholder width in the non-lyric states, and reflowing a track to 32pt
+would shred it.
 
 **Resolve geometry against `MenuBarMetrics.menuBarScreen`, never `NSScreen.main`.**
 Apple's docs define `main` as "the screen object containing the window with the

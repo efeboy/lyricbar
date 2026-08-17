@@ -22,8 +22,11 @@ replaced by the current lyric line once something is playing.
 
 On first launch the item briefly resizes: it is measuring how much menu bar room
 your other status items leave it, then caching the answer per display
-arrangement. Pick a narrower fixed band from **Width** in the options pull-down if
-you would rather it not take what it found.
+arrangement. **Width** in the options pull-down picks a share of that measured
+room — Compact, Standard, Wide, or all of it — if you would rather it took less.
+
+With nothing playing the item shrinks to a small `♪`; it only claims the full
+width while a lyric is on screen.
 
 There is no package manifest, no `launchctl`, and no signing dance — it is a
 plain Xcode app target, because `MenuBarExtra` and `SMAppService` both require a
