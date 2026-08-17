@@ -3,14 +3,19 @@ import ServiceManagement
 
 enum LoginItem {
 
-    private static let developmentBuildMarker = "/DerivedData/"
+    private static let buildOutputMarkers = ["/DerivedData/", "/Build/Products/"]
 
     static var isEnabled: Bool {
         SMAppService.mainApp.status == .enabled
     }
 
     static var isSupported: Bool {
-        !Bundle.main.bundleURL.path.contains(developmentBuildMarker)
+        isStableLocation(Bundle.main.bundleURL)
+    }
+
+    static func isStableLocation(_ bundle: URL) -> Bool {
+        let path = bundle.path
+        return !buildOutputMarkers.contains { path.contains($0) }
     }
 
     static func setEnabled(_ on: Bool) throws {

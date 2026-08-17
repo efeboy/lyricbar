@@ -598,6 +598,11 @@ Not yet addressed, in rough priority order:
 - **No artwork in the popover.** Both bridges expose it over AppleScript, but
   reading it per track would add an Apple Event round-trip on the hot path.
 - **`LoginItem` is disabled, not fixed, in development.** `SMAppService.mainApp`
-  registers whatever bundle path it was launched from, so a DerivedData build
-  would register a path that later disappears. `isSupported` detects that and
-  greys the toggle out; a release build from a stable location works normally.
+  registers whatever bundle path it was launched from, so a build output would
+  register a path that later disappears. `isStableLocation` rejects any path
+  containing `/DerivedData/` **or** `/Build/Products/` and greys the toggle out.
+  Both markers are needed: the first version checked only `/DerivedData/`, which
+  `xcodebuild -derivedDataPath build` walks straight past — its output lands in
+  `build/Build/Products/Release/` and would have been treated as a real install.
+  `LoginItemTests` pins both shapes. A copy in `/Applications` works normally,
+  which is the only way to exercise the toggle at all.
