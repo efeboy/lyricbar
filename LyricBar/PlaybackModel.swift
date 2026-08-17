@@ -18,8 +18,13 @@ final class PlaybackModel {
     private(set) var previousLine = ""
     private(set) var currentLine = ""
     private(set) var nextLine = ""
-    private(set) var boxWidth: CGFloat
+    var boxWidth: CGFloat {
+        probeWidth ?? (displayState.holdsLyric ? lyricBoxWidth : Self.placeholderWidth)
+    }
+
+    private(set) var lyricBoxWidth: CGFloat
     private(set) var fittedWidth: CGFloat
+    private var probeWidth: CGFloat?
 
     var widthPreference: LyricWidth {
         get { storedWidth }
@@ -67,6 +72,13 @@ final class PlaybackModel {
             case .idle:                              0.30
             }
         }
+
+        var holdsLyric: Bool {
+            switch self {
+            case .playing, .instrumental:      true
+            case .noLyrics, .paused, .idle:    false
+            }
+        }
     }
 
     private var chunk = ""
@@ -103,6 +115,7 @@ final class PlaybackModel {
     @ObservationIgnored private var screenTask: Task<Void, Never>?
 
     private static let gapPlaceholder = "♪"
+    private static let placeholderWidth = MenuBarMetrics.placeholderBoxWidth(for: gapPlaceholder)
     private static let startingHeader = "Starting…"
     private static let idleTitle = "Nothing playing"
     private static let pausedHeader = "Paused"
@@ -128,7 +141,7 @@ final class PlaybackModel {
         storedWidth = width
         storedSpeed = speed
         fittedWidth = fitted
-        boxWidth = MenuBarMetrics.boxWidth(width, fittedWidth: fitted)
+        lyricBoxWidth = MenuBarMetrics.boxWidth(width, fittedWidth: fitted)
         expectedRightEdge = cached?.rightEdge
 
         guard !Self.isRunningTests else { return }
@@ -147,12 +160,12 @@ final class PlaybackModel {
     }
 
     private func applyFittedWidth() {
-        boxWidth = MenuBarMetrics.boxWidth(storedWidth, fittedWidth: fittedWidth)
+        lyricBoxWidth = MenuBarMetrics.boxWidth(storedWidth, fittedWidth: fittedWidth)
         rebuildMenuLines()
     }
 
     private func rebuildMenuLines() {
-        menuLines = LyricReflow.expand(lines, trackDuration: trackDuration, width: boxWidth)
+        menuLines = LyricReflow.expand(lines, trackDuration: trackDuration, width: lyricBoxWidth)
         shownMenuIndex = -1
     }
 
@@ -161,13 +174,16 @@ final class PlaybackModel {
         fitTask = Task { [weak self] in
             guard let self else { return }
             self.isCalibrating = true
-            defer { self.isCalibrating = false }
+            defer {
+                self.isCalibrating = false
+                self.probeWidth = nil
+            }
 
             let fit = await MenuBarFit.calibrate(
                 upperBound: MenuBarMetrics.widestBox(),
                 leftLimit: MenuBarMetrics.statusStripLeftEdge()
             ) { [weak self] candidate in
-                self?.boxWidth = candidate
+                self?.probeWidth = candidate
             }
 
             guard !Task.isCancelled else { return }
@@ -182,21 +198,26 @@ final class PlaybackModel {
     }
 
     private func checkFitDrift(now: ContinuousClock.Instant) {
-        guard !isCalibrating,
+        guard !isCalibrating, probeWidth == nil,
               let expected = expectedRightEdge,
               let frame = MenuBarFit.itemFrame else { return }
 
-        guard abs(frame.maxX - expected) > Self.driftTolerance else {
+        let drift = frame.maxX - expected
+        guard abs(drift) > Self.driftTolerance else {
             driftedProbes = 0
             return
         }
         driftedProbes += 1
         guard driftedProbes >= Self.driftProbesBeforeRecalibration else { return }
-        if let last = lastCalibration,
-           last.duration(to: now).seconds < Self.recalibrationCooldown { return }
-
         driftedProbes = 0
         MenuBarFit.invalidate(MenuBarFit.signature(), in: defaults)
+
+        guard drift < 0 else {
+            expectedRightEdge = frame.maxX
+            return
+        }
+        if let last = lastCalibration,
+           last.duration(to: now).seconds < Self.recalibrationCooldown { return }
         calibrate()
     }
 

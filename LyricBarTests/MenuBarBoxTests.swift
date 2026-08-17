@@ -25,12 +25,38 @@ struct MenuBarBoxTests {
         ("empty/guard",   "", .idle),
     ]
 
-    @Test("Every state renders at exactly the same width")
+    @Test("Neither the lyric nor the state's opacity can change the width")
     func constantAcrossStates() {
         let widths = Self.states.map { renderedWidth($0.text, opacity: $0.state.opacity) }
 
         #expect(Set(widths).count == 1,
                 "states differed: \(zip(Self.states.map(\.name), widths).map { "\($0)=\($1)" })")
+    }
+
+    @Test("A lyric holds the box open; having none does not", arguments: [
+        (PlaybackModel.DisplayState.playing, true),
+        (.instrumental, true),
+        (.noLyrics, false),
+        (.paused, false),
+        (.idle, false),
+    ])
+    func onlyLyricStatesHoldTheBox(state: PlaybackModel.DisplayState, holds: Bool) {
+        #expect(state.holdsLyric == holds)
+    }
+
+    @Test("The placeholder box stays comfortably clickable but far narrower")
+    func placeholderCollapses() {
+        let placeholder = MenuBarMetrics.placeholderBoxWidth(for: "♪")
+
+        #expect(placeholder >= MenuBarMetrics.minimumPlaceholderWidth)
+        #expect(placeholder < MenuBarMetrics.minimumBoxWidth)
+        #expect(renderedWidth("♪", box: placeholder) == placeholder)
+    }
+
+    @Test("An instrumental gap keeps the full box, so a song cannot make it flicker")
+    func instrumentalDoesNotCollapse() {
+        #expect(PlaybackModel.DisplayState.instrumental.holdsLyric)
+        #expect(PlaybackModel.DisplayState.playing.holdsLyric)
     }
 
     @Test("An empty lyric occupies the full box")
@@ -81,17 +107,27 @@ struct MenuBarBoxTests {
         #expect(size >= MenuBarMetrics.minimumFontSize)
     }
 
-    @Test("The box is the resolved band, clamped by the measured fit")
-    func boxMatchesMetrics() {
-        #expect(MenuBarMetrics.boxWidth(.standard, fittedWidth: 600) == LyricWidth.standard.points)
-        #expect(MenuBarMetrics.boxWidth(.standard, fittedWidth: 200) == 200)
-        #expect(MenuBarMetrics.boxWidth(.fill, fittedWidth: 250) == 250)
-        #expect(MenuBarMetrics.boxWidth(.fill, fittedWidth: 250).isFinite)
+    @Test("Fit Menu Bar takes exactly the measured fit, and stays finite")
+    func fillTakesTheWholeFit() {
+        #expect(MenuBarMetrics.boxWidth(.fill, fittedWidth: 254) == 254)
+        #expect(MenuBarMetrics.boxWidth(.fill, fittedWidth: 254).isFinite)
     }
 
-    @Test("The preference is never widened by the display", arguments: LyricWidth.allCases)
-    func preferenceIsOnlyClamped(width: LyricWidth) {
-        #expect(MenuBarMetrics.boxWidth(width, fittedWidth: 250) <= width.points)
+    @Test("No band can claim more menu bar than was measured", arguments: LyricWidth.allCases)
+    func neverExceedsTheFit(width: LyricWidth) {
+        for fitted in [120.0, 254.0, 600.0] {
+            #expect(MenuBarMetrics.boxWidth(width, fittedWidth: fitted)
+                    <= max(fitted, MenuBarMetrics.minimumBoxWidth))
+        }
+    }
+
+    @Test("Every band is a distinct width, on a crowded bar as much as a roomy one",
+          arguments: [254.0, 400.0, 600.0, 756.0])
+    func bandsStayDistinct(fitted: CGFloat) {
+        let widths = LyricWidth.allCases.map { MenuBarMetrics.boxWidth($0, fittedWidth: fitted) }
+
+        #expect(Set(widths).count == LyricWidth.allCases.count, "collapsed to \(widths)")
+        #expect(widths == widths.sorted())
     }
 
     @Test("The box never collapses below the readable floor", arguments: [0.0, 1.0, 40.0])

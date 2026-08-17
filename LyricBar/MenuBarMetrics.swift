@@ -6,6 +6,7 @@ enum MenuBarMetrics {
     static let minimumBoxWidth: CGFloat = 80
     static let minimumFontSize: CGFloat = 9
     private static let nonNotchedStripShare: CGFloat = 0.45
+    private static let fallbackStripWidth: CGFloat = 400
     private static let sample = "Was the sky so grey at dawn"
 
     static func font(ofSize size: CGFloat = 0) -> NSFont {
@@ -32,7 +33,7 @@ enum MenuBarMetrics {
     }
 
     static func statusStripWidth(on screen: NSScreen? = menuBarScreen) -> CGFloat {
-        guard let screen else { return LyricWidth.standard.points }
+        guard let screen else { return fallbackStripWidth }
         return screen.auxiliaryTopRightArea?.width ?? screen.frame.width * nonNotchedStripShare
     }
 
@@ -45,7 +46,14 @@ enum MenuBarMetrics {
     }
 
     static func boxWidth(_ preference: LyricWidth, fittedWidth: CGFloat) -> CGFloat {
-        max(minimumBoxWidth, min(preference.points, fittedWidth))
+        max(minimumBoxWidth, min(fittedWidth, (preference.shareOfFit * fittedWidth).rounded()))
+    }
+
+    static let placeholderSidePadding: CGFloat = 10
+    static let minimumPlaceholderWidth: CGFloat = 32
+
+    static func placeholderBoxWidth(for glyph: String) -> CGFloat {
+        max(minimumPlaceholderWidth, (textWidth(glyph) + placeholderSidePadding * 2).rounded())
     }
 
     static func typicalCharacters(inBoxWidth boxWidth: CGFloat) -> Int {
@@ -58,12 +66,12 @@ enum MenuBarMetrics {
 enum LyricWidth: String, CaseIterable, Sendable {
     case compact, standard, wide, fill
 
-    var points: CGFloat {
+    var shareOfFit: CGFloat {
         switch self {
-        case .compact:  120
-        case .standard: 280
-        case .wide:     360
-        case .fill:     .infinity
+        case .compact:  0.45
+        case .standard: 0.65
+        case .wide:     0.82
+        case .fill:     1.0
         }
     }
 
