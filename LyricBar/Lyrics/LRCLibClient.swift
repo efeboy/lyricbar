@@ -16,12 +16,16 @@ enum LyricsFetchResult: Sendable {
     case retry(after: Double)
 }
 
-final class LRCLibClient: Sendable {
+protocol LyricsProvider: Sendable {
+    func fetch(title: String, artist: String, album: String, duration: Double) async -> LyricsFetchResult
+}
+
+final class LRCLibClient: LyricsProvider {
 
     static let durationTolerance: Double = 5
 
     private static let base = URL(string: "https://lrclib.net")!
-    private static let identifier = "LyricBar v1.0 (https://github.com/local/lyricbar)"
+    private static let identifier = "LyricBar/1.0 (https://github.com/efeboy/lyricbar)"
     private static let timeout: TimeInterval = 12
     private static let backpressureStatus = 503
     private static let defaultRetryAfter: Double = 1

@@ -102,6 +102,7 @@ private struct OptionsMenu: View {
 
             Toggle("Open at Login", isOn: $model.loginEnabled)
                 .onAppear { model.refreshLoginState() }
+                .disabled(!model.loginSupported)
 
             Picker("Width", selection: $model.widthPreference) {
                 ForEach(LyricWidth.allCases, id: \.self) { width in
@@ -116,6 +117,10 @@ private struct OptionsMenu: View {
             }
 
             Divider()
+
+            Button("Open Automation Settings…") {
+                model.openAutomationSettings()
+            }
 
             Button("Quit LyricBar") {
                 NSApplication.shared.terminate(nil)

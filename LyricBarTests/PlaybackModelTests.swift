@@ -1,0 +1,204 @@
+import Testing
+import Foundation
+@testable import LyricBar
+
+private final class FakeBridge: PlaybackBridge {
+    let source: PlaybackSource
+    var next: BridgeSnapshot = .unavailable
+    var positionValue: Double?
+
+    init(source: PlaybackSource) { self.source = source }
+
+    func snapshot() -> BridgeSnapshot { next }
+    func position() -> Double? { positionValue }
+}
+
+private struct FakeLyrics: LyricsProvider {
+    let result: LyricsFetchResult
+
+    func fetch(title: String, artist: String, album: String, duration: Double) async
+    -> LyricsFetchResult { result }
+}
+
+private func track(_ id: String,
+                   title: String = "Girl",
+                   state: PlayerState = .playing,
+                   source: PlaybackSource = .spotify) -> BridgeSnapshot {
+    .now(NowPlaying(source: source, state: state, trackID: id, title: title,
+                    artist: "The Beatles", album: "Rubber Soul", durationSeconds: 152))
+}
+
+@Suite("Playback model")
+@MainActor
+struct PlaybackModelTests {
+
+    private static let suiteName = "net.local.lyricbar.model-tests"
+
+    private func makeModel(bridges: [PlaybackBridge],
+                           lyrics: LyricsFetchResult = .unavailable) -> PlaybackModel {
+        let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        MenuBarFit.store(MenuBarFit.Fit(boxWidth: 300, rightEdge: 1000),
+                         for: MenuBarFit.signature(), in: defaults)
+        return PlaybackModel(defaults: defaults, bridges: bridges,
+                             lyrics: FakeLyrics(result: lyrics))
+    }
+
+    private let lines = [
+        LyricLine(time: 10, text: "first"),
+        LyricLine(time: 20, text: "second"),
+        LyricLine(time: 30, text: "third"),
+    ]
+
+    @Test("Nothing playing reads as idle, and the box collapses")
+    func idleWhenNothingPlays() {
+        let model = makeModel(bridges: [FakeBridge(source: .spotify)])
+
+        model.refreshNow()
+
+        #expect(model.displayState == .idle)
+        #expect(model.lineText == "♪")
+        #expect(model.boxWidth < model.lyricBoxWidth)
+    }
+
+    @Test("A refused Automation prompt is reported, not silently ignored")
+    func automationDenialIsSurfaced() {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = .denied
+        let model = makeModel(bridges: [spotify])
+
+        model.refreshNow()
+
+        #expect(model.displayState == .denied)
+        #expect(model.trackTitle == "Automation access denied")
+        #expect(model.trackSubtitle.contains("Automation"))
+        #expect(model.lineText != "♪")
+        #expect(model.displayState.opacity == 1.0)
+    }
+
+    @Test("One denied source does not mask another that is playing")
+    func denialIgnoredWhenSomethingElsePlays() {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = .denied
+        let music = FakeBridge(source: .appleMusic)
+        music.next = track("m1", title: "Blackbird", source: .appleMusic)
+        let model = makeModel(bridges: [spotify, music])
+
+        model.refreshNow()
+
+        #expect(model.displayState != .denied)
+        #expect(model.trackTitle == "Blackbird")
+    }
+
+    @Test("A new track reports loading while the fetch is still in flight")
+    func loadingBeforeTheFetchLands() {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        model.refreshNow()
+
+        #expect(model.displayState == .loading)
+        #expect(model.header == "Loading lyrics…")
+        #expect(model.trackTitle == "Girl")
+        #expect(model.boxWidth == model.lyricBoxWidth)
+    }
+
+    @Test("No-lyrics is only reported once the fetch has actually resolved")
+    func noLyricsOnlyAfterTheFetch() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .unavailable)
+
+        model.refreshNow()
+        #expect(model.displayState == .loading)
+
+        await model.awaitPendingLyrics()
+
+        #expect(model.displayState == .noLyrics)
+        #expect(model.header == "No synced lyrics found")
+        #expect(model.boxWidth < model.lyricBoxWidth)
+    }
+
+    @Test("Once lyrics land, the line at the playhead is what shows")
+    func lyricsFollowThePlayhead() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        model.refreshNow()
+        await model.awaitPendingLyrics()
+        spotify.positionValue = 25
+        model.refreshNow()
+
+        #expect(model.displayState == .playing)
+        #expect(model.lineText == "second")
+        #expect(model.currentLine == "second")
+        #expect(model.nextLine == "third")
+        #expect(model.boxWidth == model.lyricBoxWidth)
+    }
+
+    @Test("The intro before the first timestamp is instrumental, and holds the box")
+    func introIsInstrumental() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        model.refreshNow()
+        await model.awaitPendingLyrics()
+        spotify.positionValue = 2
+        model.refreshNow()
+
+        #expect(model.displayState == .instrumental)
+        #expect(model.boxWidth == model.lyricBoxWidth)
+    }
+
+    @Test("Spotify wins when both apps are playing")
+    func spotifyWinsTies() {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1", title: "Girl")
+        let music = FakeBridge(source: .appleMusic)
+        music.next = track("m1", title: "Blackbird", source: .appleMusic)
+        let model = makeModel(bridges: [spotify, music])
+
+        model.refreshNow()
+
+        #expect(model.trackTitle == "Girl")
+    }
+
+    @Test("A paused source still shows its track")
+    func pausedSourceStillShows() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1", state: .paused)
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        model.refreshNow()
+        await model.awaitPendingLyrics()
+        model.refreshNow()
+
+        #expect(model.displayState == .paused)
+        #expect(model.trackTitle == "Girl")
+        #expect(model.boxWidth < model.lyricBoxWidth)
+    }
+
+    @Test("Pausing lyric updates freezes the item and restores the header on resume")
+    func pauseAndResume() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        model.refreshNow()
+        await model.awaitPendingLyrics()
+
+        model.isPaused = true
+        #expect(model.displayState == .paused)
+        #expect(model.header == "Paused")
+
+        spotify.positionValue = 25
+        model.refreshNow()
+        #expect(model.displayState == .paused)
+
+        model.isPaused = false
+        #expect(model.header == "Girl — The Beatles")
+    }
+}

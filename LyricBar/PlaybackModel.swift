@@ -7,7 +7,8 @@ import Observation
 final class PlaybackModel {
 
     var lineText: String {
-        chunk.isEmpty ? Self.gapPlaceholder : chunk
+        if !chunk.isEmpty { return chunk }
+        return displayState == .denied ? Self.deniedPlaceholder : Self.gapPlaceholder
     }
 
     private(set) var header = PlaybackModel.startingHeader
@@ -18,6 +19,7 @@ final class PlaybackModel {
     private(set) var previousLine = ""
     private(set) var currentLine = ""
     private(set) var nextLine = ""
+
     var boxWidth: CGFloat {
         probeWidth ?? (displayState.holdsLyric ? lyricBoxWidth : Self.placeholderWidth)
     }
@@ -62,21 +64,23 @@ final class PlaybackModel {
         }
     }
 
+    var loginSupported: Bool { LoginItem.isSupported }
+
     enum DisplayState: Equatable {
-        case playing, instrumental, noLyrics, paused, idle
+        case playing, instrumental, loading, noLyrics, paused, idle, denied
 
         var opacity: Double {
             switch self {
-            case .playing, .instrumental, .noLyrics: 1.0
-            case .paused:                            0.55
-            case .idle:                              0.30
+            case .playing, .instrumental, .noLyrics, .denied: 1.0
+            case .loading, .paused:                           0.55
+            case .idle:                                       0.30
             }
         }
 
         var holdsLyric: Bool {
             switch self {
-            case .playing, .instrumental:      true
-            case .noLyrics, .paused, .idle:    false
+            case .playing, .instrumental, .loading:   true
+            case .noLyrics, .paused, .idle, .denied:  false
             }
         }
     }
@@ -89,8 +93,8 @@ final class PlaybackModel {
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let clock = ContinuousClock()
-    @ObservationIgnored private let bridges: [PlaybackBridge] = [SpotifyBridge(), MusicBridge()]
-    @ObservationIgnored private let lrclib = LRCLibClient()
+    @ObservationIgnored private let bridges: [PlaybackBridge]
+    @ObservationIgnored private let lyrics: any LyricsProvider
 
     @ObservationIgnored private var activeBridge: PlaybackBridge?
     @ObservationIgnored private var lines: [LyricLine] = []
@@ -99,6 +103,8 @@ final class PlaybackModel {
     @ObservationIgnored private var currentTrackID: String?
     @ObservationIgnored private var shownMenuIndex = -1
     @ObservationIgnored private var shownLyricIndex = -2
+    @ObservationIgnored private var fetching = false
+    @ObservationIgnored private var automationDenied = false
 
     @ObservationIgnored private var lastSnapshot: NowPlaying?
     @ObservationIgnored private var positionSample: (position: Double, at: ContinuousClock.Instant)?
@@ -115,11 +121,18 @@ final class PlaybackModel {
     @ObservationIgnored private var screenTask: Task<Void, Never>?
 
     private static let gapPlaceholder = "♪"
-    private static let placeholderWidth = MenuBarMetrics.placeholderBoxWidth(for: gapPlaceholder)
+    private static let deniedPlaceholder = "⚠\u{FE0E}"
+    private static let placeholderWidth = max(
+        MenuBarMetrics.placeholderBoxWidth(for: gapPlaceholder),
+        MenuBarMetrics.placeholderBoxWidth(for: deniedPlaceholder))
     private static let startingHeader = "Starting…"
     private static let idleTitle = "Nothing playing"
     private static let pausedHeader = "Paused"
+    private static let loadingHeader = "Loading lyrics…"
     private static let noLyricsHeader = "No synced lyrics found"
+    private static let deniedTitle = "Automation access denied"
+    private static let deniedDetail = "LyricBar cannot read Spotify or Music"
+    private static let deniedHint = "Privacy & Security → Automation"
     private static let metadataInterval: Double = 1
     private static let recalibrationCooldown: Double = 30
     private static let driftProbesBeforeRecalibration = 2
@@ -130,8 +143,12 @@ final class PlaybackModel {
         static let speed = "tickInterval"
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard,
+         bridges: [PlaybackBridge] = [SpotifyBridge(), MusicBridge()],
+         lyrics: any LyricsProvider = LRCLibClient()) {
         self.defaults = defaults
+        self.bridges = bridges
+        self.lyrics = lyrics
 
         let width = LyricWidth(rawValue: defaults.string(forKey: Keys.width) ?? "") ?? .fill
         let speed = UpdateSpeed(rawValue: defaults.double(forKey: Keys.speed)) ?? .balanced
@@ -155,9 +172,26 @@ final class PlaybackModel {
             || NSClassFromString("XCTestCase") != nil
     }
 
+    func refreshNow() {
+        lastMetadataProbe = nil
+        tick()
+    }
+
+    func awaitPendingLyrics() async {
+        await fetchTask?.value
+    }
+
     func refreshLoginState() {
         loginRegistered = LoginItem.isEnabled
     }
+
+    func openAutomationSettings() {
+        guard let url = URL(string: Self.automationSettingsURL) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private static let automationSettingsURL =
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
 
     private func applyFittedWidth() {
         lyricBoxWidth = MenuBarMetrics.boxWidth(storedWidth, fittedWidth: fittedWidth)
@@ -264,17 +298,14 @@ final class PlaybackModel {
         if probeMetadata {
             lastMetadataProbe = now
             checkFitDrift(now: now)
-            if let (bridge, snapshot) = pickActive() {
-                activeBridge = bridge
-                lastSnapshot = snapshot
-            } else {
-                activeBridge = nil
-                lastSnapshot = nil
-            }
+            let probe = probeSources()
+            automationDenied = probe.denied && probe.active == nil
+            activeBridge = probe.active?.bridge
+            lastSnapshot = probe.active?.snapshot
         }
 
         guard let snapshot = lastSnapshot, let bridge = activeBridge else {
-            goIdle()
+            if automationDenied { goDenied() } else { goIdle() }
             return
         }
 
@@ -283,6 +314,8 @@ final class PlaybackModel {
             clear()
             trackDuration = snapshot.durationSeconds
             show(snapshot)
+            header = Self.loadingHeader
+            displayState = .loading
             loadLyrics(for: snapshot)
             return
         }
@@ -295,7 +328,7 @@ final class PlaybackModel {
 
         guard !lines.isEmpty else {
             positionSample = nil
-            displayState = .noLyrics
+            displayState = fetching ? .loading : .noLyrics
             return
         }
 
@@ -319,14 +352,28 @@ final class PlaybackModel {
         return probed
     }
 
-    private func pickActive() -> (PlaybackBridge, NowPlaying)? {
-        var pausedHit: (PlaybackBridge, NowPlaying)?
+    private struct SourceProbe {
+        var active: (bridge: PlaybackBridge, snapshot: NowPlaying)?
+        var denied = false
+    }
+
+    private func probeSources() -> SourceProbe {
+        var probe = SourceProbe()
         for bridge in bridges {
-            guard let snapshot = bridge.snapshot() else { continue }
-            if snapshot.state == .playing { return (bridge, snapshot) }
-            if pausedHit == nil { pausedHit = (bridge, snapshot) }
+            switch bridge.snapshot() {
+            case .denied:
+                probe.denied = true
+            case .unavailable:
+                continue
+            case .now(let snapshot):
+                if snapshot.state == .playing {
+                    probe.active = (bridge, snapshot)
+                    return probe
+                }
+                if probe.active == nil { probe.active = (bridge, snapshot) }
+            }
         }
-        return pausedHit
+        return probe
     }
 
     private func show(_ snapshot: NowPlaying) {
@@ -339,6 +386,7 @@ final class PlaybackModel {
     }
 
     private func goIdle() {
+        guard displayState != .idle else { return }
         currentTrackID = nil
         clear()
         header = Self.idleTitle
@@ -346,6 +394,17 @@ final class PlaybackModel {
         trackArtist = ""
         trackSubtitle = ""
         displayState = .idle
+    }
+
+    private func goDenied() {
+        guard displayState != .denied else { return }
+        currentTrackID = nil
+        clear()
+        header = Self.deniedTitle
+        trackTitle = Self.deniedTitle
+        trackArtist = Self.deniedDetail
+        trackSubtitle = Self.deniedHint
+        displayState = .denied
     }
 
     private func updateMenuLine(at position: Double) {
@@ -378,6 +437,7 @@ final class PlaybackModel {
         positionSample = nil
         shownMenuIndex = -1
         shownLyricIndex = -2
+        fetching = false
         chunk = ""
         previousLine = ""
         currentLine = ""
@@ -402,6 +462,7 @@ final class PlaybackModel {
 
     private func loadLyrics(for snapshot: NowPlaying) {
         fetchTask?.cancel()
+        fetching = true
         let id = snapshot.trackID
         let title = snapshot.title
         let artist = snapshot.artist
@@ -411,19 +472,21 @@ final class PlaybackModel {
         fetchTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                let result = await self.lrclib.fetch(
+                let result = await self.lyrics.fetch(
                     title: title, artist: artist, album: album, duration: duration)
                 if Task.isCancelled { return }
                 guard id == self.currentTrackID else { return }
 
                 switch result {
                 case .synced(let parsed):
+                    self.fetching = false
                     self.lines = parsed
                     self.rebuildMenuLines()
                     self.shownLyricIndex = -2
                     if !self.paused { self.header = "\(title) — \(artist)" }
                     return
                 case .unavailable:
+                    self.fetching = false
                     self.lines = []
                     self.menuLines = []
                     self.shownMenuIndex = -1
