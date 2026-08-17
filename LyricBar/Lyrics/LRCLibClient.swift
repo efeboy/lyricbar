@@ -1,126 +1,117 @@
 import Foundation
 
-// MARK: - LRCLIB client
-//
-// Endpoints verified against server source (tranxuanthang/lrclib, server/src/router.rs):
-//   GET /api/get     - requires track_name + artist_name; album_name & duration optional
-//   GET /api/search  - q OR track_name/artist_name/album_name
-// Response fields are camelCase: syncedLyrics, plainLyrics, instrumental, duration.
-// The server identifies clients via `Lrclib-Client` (preferred over User-Agent) and
-// sheds load with 503 + Retry-After when its semaphore is exhausted (errors.rs).
-
-struct LRCLibTrack: Decodable {
-    var id: Int
-    var trackName: String?
-    var artistName: String?
-    var duration: Double?
-    var instrumental: Bool
-    var plainLyrics: String?
-    var syncedLyrics: String?
+struct LRCLibTrack: Decodable, Sendable {
+    let id: Int
+    let trackName: String?
+    let artistName: String?
+    let duration: Double?
+    let instrumental: Bool
+    let plainLyrics: String?
+    let syncedLyrics: String?
 }
 
 enum LyricsFetchResult: Sendable {
     case synced([LyricLine])
-    case unavailable      // no synced lyrics, or instrumental
+    case unavailable
     case retry(after: Double)
 }
 
 final class LRCLibClient: Sendable {
-    private let base = URL(string: "https://lrclib.net")!
-    private let client = "LyricBar v1.0 (https://github.com/local/lyricbar)"
 
-    private func request(_ url: URL) -> URLRequest {
-        var r = URLRequest(url: url)
-        r.timeoutInterval = 12
-        r.setValue(client, forHTTPHeaderField: "Lrclib-Client")
-        r.setValue(client, forHTTPHeaderField: "User-Agent")
-        return r
-    }
+    static let durationTolerance: Double = 5
+
+    private static let base = URL(string: "https://lrclib.net")!
+    private static let identifier = "LyricBar v1.0 (https://github.com/local/lyricbar)"
+    private static let timeout: TimeInterval = 12
+    private static let backpressureStatus = 503
+    private static let defaultRetryAfter: Double = 1
 
     func fetch(title: String, artist: String, album: String, duration: Double) async -> LyricsFetchResult {
-        // 1. Exact-signature lookup.
-        var c = URLComponents(url: base.appendingPathComponent("api/get"),
-                              resolvingAgainstBaseURL: false)!
-        c.queryItems = [
+        let signature = Self.endpoint("api/get", [
             .init(name: "track_name", value: title),
             .init(name: "artist_name", value: artist),
             .init(name: "album_name", value: album),
             .init(name: "duration", value: String(Int(duration.rounded()))),
-        ]
-        switch await get(c.url!, decodeArray: false) {
-        case .retry(let s): return .retry(after: s)
+        ])
+
+        switch await load(signature, expectingList: false) {
+        case .retry(let after):
+            return .retry(after: after)
         case .ok(let tracks):
-            if let t = tracks.first, let l = usable(t) { return .synced(l) }
-            if let t = tracks.first, t.instrumental { return .unavailable }
-        case .failed: break
+            if let track = tracks.first {
+                if let lines = Self.lines(from: track) { return .synced(lines) }
+                if track.instrumental { return .unavailable }
+            }
+        case .failed:
+            break
         }
 
-        // 2. Fall back to search, then pick the closest duration match.
-        //    Album names differ between releases (remasters, archive editions),
-        //    so signature lookups miss often; duration is the reliable key.
-        var s = URLComponents(url: base.appendingPathComponent("api/search"),
-                              resolvingAgainstBaseURL: false)!
-        s.queryItems = [
+        let search = Self.endpoint("api/search", [
             .init(name: "track_name", value: title),
             .init(name: "artist_name", value: artist),
-        ]
-        switch await get(s.url!, decodeArray: true) {
-        case .retry(let sec): return .retry(after: sec)
-        case .failed: return .unavailable
-        case .ok(let results):
-            if let b = Self.bestMatch(among: results, duration: duration), let l = usable(b) {
-                return .synced(l)
-            }
+        ])
+
+        switch await load(search, expectingList: true) {
+        case .retry(let after):
+            return .retry(after: after)
+        case .failed:
             return .unavailable
+        case .ok(let results):
+            guard let match = Self.bestMatch(among: results, duration: duration),
+                  let lines = Self.lines(from: match) else { return .unavailable }
+            return .synced(lines)
         }
     }
 
-    /// How far a search hit's duration may sit from the playing track and still
-    /// count as the same recording. Beyond this it is likely a different edit
-    /// entirely, and wrong-length lyrics drift badly against playback.
-    static let durationTolerance: Double = 5
-
-    /// Picks the search candidate whose duration is closest to the playing track,
-    /// rejecting anything outside `durationTolerance`.
-    ///
-    /// Split out of `fetch` and kept pure so it can be tested without touching the
-    /// network: the matching, not the transport, is where this goes wrong.
     static func bestMatch(among results: [LRCLibTrack], duration: Double) -> LRCLibTrack? {
-        let candidates = results.filter { $0.syncedLyrics?.isEmpty == false }
-        guard let best = candidates.min(by: {
+        let synced = results.filter { $0.syncedLyrics?.isEmpty == false }
+        guard let closest = synced.min(by: {
             abs(($0.duration ?? 0) - duration) < abs(($1.duration ?? 0) - duration)
         }) else { return nil }
-        return abs((best.duration ?? 0) - duration) <= durationTolerance ? best : nil
+        return abs((closest.duration ?? 0) - duration) <= durationTolerance ? closest : nil
     }
 
-    private func usable(_ t: LRCLibTrack) -> [LyricLine]? {
-        guard !t.instrumental, let s = t.syncedLyrics, !s.isEmpty else { return nil }
-        let lines = LRCParser.parse(s)
+    private static func lines(from track: LRCLibTrack) -> [LyricLine]? {
+        guard !track.instrumental,
+              let synced = track.syncedLyrics, !synced.isEmpty else { return nil }
+        let lines = LRCParser.parse(synced)
         return lines.isEmpty ? nil : lines
     }
 
-    private enum GetResult {
+    private static func endpoint(_ path: String, _ query: [URLQueryItem]) -> URL {
+        base.appending(path: path).appending(queryItems: query)
+    }
+
+    private static func request(for url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
+        request.setValue(identifier, forHTTPHeaderField: "Lrclib-Client")
+        request.setValue(identifier, forHTTPHeaderField: "User-Agent")
+        return request
+    }
+
+    private enum Response {
         case ok([LRCLibTrack])
         case retry(Double)
         case failed
     }
 
-    private func get(_ url: URL, decodeArray: Bool) async -> GetResult {
+    private func load(_ url: URL, expectingList: Bool) async -> Response {
         do {
-            let (data, resp) = try await URLSession.shared.data(for: request(url))
-            guard let http = resp as? HTTPURLResponse else { return .failed }
+            let (data, response) = try await URLSession.shared.data(for: Self.request(for: url))
+            guard let http = response as? HTTPURLResponse else { return .failed }
 
-            if http.statusCode == 503 {
-                let after = (http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init)) ?? 1
-                return .retry(after)
+            if http.statusCode == Self.backpressureStatus {
+                let after = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init)
+                return .retry(after ?? Self.defaultRetryAfter)
             }
             guard http.statusCode == 200 else { return .failed }
 
-            let dec = JSONDecoder()
-            if decodeArray {
-                return .ok(try dec.decode([LRCLibTrack].self, from: data))
+            let decoder = JSONDecoder()
+            if expectingList {
+                return .ok(try decoder.decode([LRCLibTrack].self, from: data))
             }
-            return .ok([try dec.decode(LRCLibTrack.self, from: data)])
+            return .ok([try decoder.decode(LRCLibTrack.self, from: data)])
         } catch {
             return .failed
         }

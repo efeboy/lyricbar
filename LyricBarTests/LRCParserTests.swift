@@ -1,10 +1,6 @@
 import Testing
 @testable import LyricBar
 
-// The LRC grammar is the app's only real parsing surface, and it is fed by a
-// public database where providers disagree about the fraction separator and its
-// digit count. These cases are transcribed from live LRCLIB payloads.
-
 @Suite("LRC parsing")
 struct LRCParsingTests {
 
@@ -20,9 +16,6 @@ struct LRCParsingTests {
         #expect(lines.map(\.time) == [3.5, 12.0, 60.0])
     }
 
-    // `[mm:ss.xx]` is the common form, but `[mm:ss:xx]` and 1-3 fraction digits
-    // all appear in the wild. A fraction is a decimal, not a fixed hundredths
-    // field: "5" is half a second, "05" is a twentieth.
     @Test("Fraction separators and digit counts", arguments: [
         ("[00:01.50] x", 1.5),
         ("[00:01:50] x", 1.5),
@@ -33,6 +26,7 @@ struct LRCParsingTests {
     ])
     func fractionScaling(source: String, expected: Double) {
         let lines = LRCParser.parse(source)
+
         #expect(lines.count == 1)
         #expect(abs((lines.first?.time ?? -1) - expected) < 1e-9)
     }
@@ -42,8 +36,6 @@ struct LRCParsingTests {
         #expect(LRCParser.parse("[100:30.00] late").first?.time == 6030)
     }
 
-    // A repeated chorus is published as one text with several timestamps; each
-    // must become its own line or the chorus shows only on its first pass.
     @Test("One line with several timestamps expands to several lines")
     func repeatedChorus() {
         let lines = LRCParser.parse("[00:10.00][01:20.00][02:30.00] chorus")
@@ -66,14 +58,19 @@ struct LRCParsingTests {
         #expect(lines.map(\.text) == ["only this"])
     }
 
-    // A bare timestamp marks an instrumental gap. It must survive parsing as an
-    // empty line so the model can swap in its placeholder and hold the item width.
     @Test("Bare timestamps survive as empty lines")
     func keepsEmptyLines() {
         let lines = LRCParser.parse("[00:00.00]\n[00:04.00] words")
 
         #expect(lines.count == 2)
         #expect(lines.first?.text == "")
+    }
+
+    @Test("Windows line endings do not leak into the text")
+    func stripsCarriageReturns() {
+        let lines = LRCParser.parse("[00:01.00] first\r\n[00:02.00] second\r\n")
+
+        #expect(lines.map(\.text) == ["first", "second"])
     }
 }
 
@@ -97,8 +94,6 @@ struct LRCIndexTests {
         #expect(LRCParser.index(at: 42, in: []) == nil)
     }
 
-    // The line becomes active exactly at its timestamp and stays active until the
-    // next one — off-by-one here would show every line a beat early or late.
     @Test("Boundaries are inclusive at the start of a line", arguments: [
         (10.0, 0), (10.001, 0), (19.999, 0),
         (20.0, 1), (29.999, 1),

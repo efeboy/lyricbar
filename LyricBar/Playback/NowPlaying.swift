@@ -1,11 +1,5 @@
 import Foundation
 
-// MARK: - Playback source model
-//
-// A single normalized snapshot of "what is playing right now", regardless of
-// whether it came from Spotify or Apple Music. The rest of the app never sees
-// the source-specific AppleScript quirks — those are absorbed by the bridges.
-
 enum PlaybackSource: String, Sendable {
     case spotify = "Spotify"
     case appleMusic = "Music"
@@ -15,7 +9,6 @@ enum PlayerState: String, Sendable {
     case stopped, playing, paused
 }
 
-/// One immutable observation of the active player.
 struct NowPlaying: Equatable, Sendable {
     var source: PlaybackSource
     var state: PlayerState
@@ -26,16 +19,39 @@ struct NowPlaying: Equatable, Sendable {
     var durationSeconds: Double
 }
 
-/// A playback source that can be interrogated over AppleScript.
-///
-/// Both concrete bridges wrap precompiled `NSAppleScript` objects. Each call is
-/// an Apple Event round-trip to the target app and is by far the dominant cost
-/// of this app, so callers poll metadata about once a second and position at the
-/// finer tick rate.
 protocol PlaybackBridge: AnyObject {
     var source: PlaybackSource { get }
-    /// Current track + state, or nil if the app is not running / stopped.
     func snapshot() -> NowPlaying?
-    /// Playback position in seconds, or nil if unavailable.
     func position() -> Double?
+}
+
+enum PlaybackScript {
+    static let unitSeparator = "\u{001F}"
+    static let notRunning = "notrunning"
+    static let stopped = "stopped"
+    static let expectedFieldCount = 6
+
+    static func compiled(_ source: String) -> NSAppleScript? {
+        let script = NSAppleScript(source: source)
+        var error: NSDictionary?
+        script?.compileAndReturnError(&error)
+        return script
+    }
+
+    static func position(from script: NSAppleScript?) -> Double? {
+        var error: NSDictionary?
+        guard let descriptor = script?.executeAndReturnError(&error) else { return nil }
+        let value = descriptor.doubleValue
+        return value < 0 ? nil : value
+    }
+
+    static func fields(from script: NSAppleScript?) -> [String]? {
+        var error: NSDictionary?
+        guard let descriptor = script?.executeAndReturnError(&error),
+              let raw = descriptor.stringValue,
+              raw != notRunning, raw != stopped else { return nil }
+
+        let fields = raw.components(separatedBy: unitSeparator)
+        return fields.count >= expectedFieldCount ? fields : nil
+    }
 }
