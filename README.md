@@ -35,11 +35,14 @@ real app bundle.
 ### First run
 
 macOS prompts once per controlled app for **Automation** access to Spotify and
-Music. Both must be allowed, or the app runs and silently shows no lyrics. To
-check or change it later: System Settings ▸ Privacy & Security ▸ Automation.
+Music. If you refuse, the menu bar item shows `⚠︎` and the popover says so —
+**Open Automation Settings…** in the options pull-down takes you straight to
+System Settings ▸ Privacy & Security ▸ Automation.
 
 **Open at login** is a menu toggle backed by `SMAppService.mainApp`; the system
-lists it under System Settings ▸ General ▸ Login Items.
+lists it under System Settings ▸ General ▸ Login Items. It is greyed out for
+builds run from DerivedData, which would otherwise register a path that vanishes
+on the next clean build.
 
 ## Tests
 
@@ -47,13 +50,14 @@ lists it under System Settings ▸ General ▸ Login Items.
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-57 tests in 7 Swift Testing suites cover the pure logic: LRC parsing, the
-active-line binary search, LRCLIB duration matching, where a long line breaks,
-the fixed-width menu bar image, the fit calibration's arithmetic, and the
-guarantee that no lyric is ever truncated. It is a hosted test bundle, so the app
-launches as the test host — `PlaybackModel` detects that and leaves its poll loop,
-screen observer, and menu bar measurement off, so tests never touch Spotify,
-Music, the network, or the real menu bar.
+71 tests in 8 Swift Testing suites cover LRC parsing, the active-line binary
+search, LRCLIB duration matching, where a long line breaks, the fixed-width menu
+bar image, the fit calibration's arithmetic, the guarantee that no lyric is ever
+truncated, and the playback tick logic driven through injected fakes.
+
+It is a hosted test bundle, so the app launches as the test host — `PlaybackModel`
+detects that and leaves its poll loop, screen observer, and menu bar measurement
+off, so tests never touch Spotify, Music, the network, or the real menu bar.
 
 A green build proves nothing about whether the menu bar item renders or whether
 Automation was granted. Verify UI-adjacent behavior by running the app.

@@ -60,7 +60,7 @@ Login Items.
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-57 tests in 7 Swift Testing suites, covering the pure logic:
+71 tests in 8 Swift Testing suites:
 
 - **`LRCParserTests`** — the LRC grammar (fraction separators and digit counts,
   repeated chorus timestamps, CRLF payloads) and `index(at:)` boundaries.
@@ -79,6 +79,11 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
   state, and an over-wide line shrinks into the box rather than widening it.
 - **`MenuBarFitTests`** — the pure half of the fit calibration:
   `crowdsNeighbours`, `optimisticBound`, the cache round-trip, and signatures.
+- **`PlaybackModelTests`** — the tick logic, driven through injected fakes: track
+  changes, the loading window, instrumental intros, pause/resume, Spotify winning
+  ties, and Automation denial. `refreshNow()` forces a full metadata probe and
+  `awaitPendingLyrics()` waits on the per-track fetch, so every case is
+  deterministic without a clock or the network.
 
 It is a **hosted** bundle (`TEST_HOST` is the app), so `test` launches LyricBar.
 `PlaybackModel.isRunningTests` detects that and skips the poll loop, the screen
@@ -97,7 +102,7 @@ live item" below.
 Data flows one way each tick, driven by a single async loop in `PlaybackModel`:
 
 ```
-Task.sleep(tick) → pickActive(): Spotify | Music (AppleScript) → track changed?
+Task.sleep(tick) → probeSources(): Spotify | Music (AppleScript) → track changed?
                                               → LRCLibClient.fetch (async, per track)
                                               → LRCParser.parse → [LyricLine] ──┐
                                                                                 │
@@ -116,8 +121,9 @@ lookup path. Changing the width preference or the screen layout rebuilds only
 
 Files under `LyricBar/`:
 
-- **`Playback/NowPlaying.swift`** — `PlaybackBridge` protocol, the normalized
-  `NowPlaying` snapshot every source resolves to (`PlaybackSource`, `PlayerState`),
+- **`Playback/NowPlaying.swift`** — `PlaybackBridge` protocol, `BridgeSnapshot`
+  (`now` / `unavailable` / `denied`), the normalized `NowPlaying` snapshot every
+  source resolves to (`PlaybackSource`, `PlayerState`),
   and `PlaybackScript`, which holds the AppleScript plumbing both bridges share
   (compile, read a numeric descriptor, split a separator-delimited snapshot).
 - **`Playback/SpotifyBridge.swift`**, **`Playback/MusicBridge.swift`** — each is
@@ -142,8 +148,9 @@ Files under `LyricBar/`:
 
 ### Source selection
 
-`pickActive()` snapshots the bridges in order and prefers whichever is **playing**;
-if none is playing it falls back to a **paused** source so its header still shows.
+`probeSources()` snapshots the bridges in order and prefers whichever is
+**playing**; if none is playing it falls back to a **paused** source so its header
+still shows, and it separately reports whether any source refused Automation.
 **Spotify wins ties** (it is listed first). Metadata is probed about once a second
 — gated on `ContinuousClock` elapsed time, not on a tick counter, so the rate is
 the same at every update speed. Only `player position` runs at the finer tick, and
@@ -187,9 +194,12 @@ handful per track, never per line.
 
 `.instrumental` deliberately **keeps** the full box. Intros, outros and
 bare-timestamp gaps happen mid-song, so collapsing on them would flicker the item
-during playback, which is the very thing the fixed box exists to prevent. Only
-`.idle`, `.noLyrics` and `.paused` collapse — all of which last for a track or
-longer. If you add a `DisplayState` case, decide which side of that line it is on.
+during playback, which is the very thing the fixed box exists to prevent.
+`.loading` holds it for the same reason: it sits between a track change and the
+fetch landing, and most tracks do have lyrics, so holding avoids a width change at
+the exact moment the first line appears. `.idle`, `.noLyrics`, `.paused` and
+`.denied` collapse — all of which last for a track or longer. If you add a
+`DisplayState` case, decide which side of that line it is on.
 
 The placeholder width comes from `MenuBarMetrics.placeholderBoxWidth(for:)`, with
 a `minimumPlaceholderWidth` floor so the item stays comfortably clickable — the
@@ -506,9 +516,9 @@ the client-rendered docs page:
 
 Tracks with no synced match, and instrumentals, render as a dimmed `♪`.
 
-The `Lrclib-Client` identifier still points at a placeholder URL
-(`github.com/local/lyricbar`). LRCLIB asks for a real contact; set it before any
-public release.
+The `Lrclib-Client` identifier is `LyricBar/1.0 (https://github.com/efeboy/lyricbar)`,
+taken from the git remote. LRCLIB asks for a real contact, so keep it pointing at
+something reachable if the repository ever moves.
 
 ## Performance
 
@@ -542,17 +552,52 @@ over `NSRegularExpression`, `URL.appending(path:queryItems:)` over force-unwrapp
 `@Bindable` over hand-rolled `Toggle` bindings, and the async poll loop over
 `Timer`. The rewrite deliberately removed those hand-rolls; don't reintroduce them.
 
+## Automation denial
+
+A refused Automation prompt returns AppleScript error **-1743**
+(`errAEEventNotPermitted`); **-1744** means consent has not been given yet. The
+app used to swallow both and show "Nothing playing", which is indistinguishable
+from Spotify being closed — the user had no way to learn why lyrics never
+appeared.
+
+`PlaybackScript.fields` now reads the error dictionary and returns `.denied`
+rather than `.unavailable`, so the bridges resolve to `BridgeSnapshot.denied`.
+`probeSources` reports a denial **only when nothing else is playing**: one
+refused app must not mask the other working. The item then shows `⚠︎` at full
+opacity instead of the dimmed `♪`, the popover reads "Automation access denied /
+Privacy & Security → Automation", and the pull-down has an **Open Automation
+Settings…** item that deep-links to
+`x-apple.systempreferences:com.apple.preference.security?Privacy_Automation`.
+
+`snapshot()` returns `BridgeSnapshot`, not `NowPlaying?`, precisely so this
+distinction cannot be dropped again — an optional had nowhere to put "denied".
+
+## Injection and test seams
+
+`PlaybackModel.init` takes its `UserDefaults`, its `[PlaybackBridge]` and a
+`LyricsProvider`, all defaulted to the real ones, so `PlaybackModelTests` drives
+the tick logic with fakes and never touches Apple Events or the network.
+`LRCLibClient` conforms to `LyricsProvider`; that protocol exists for the seam,
+not for a second implementation.
+
+Two internal methods exist for tests and nothing else, and their names say so:
+`refreshNow()` clears `lastMetadataProbe` and ticks, so a test gets a full
+metadata probe rather than waiting out `metadataInterval`; `awaitPendingLyrics()`
+awaits the per-track fetch `Task`. Prefer driving those over adding sleeps.
+
 ## Known gaps
 
 Not yet addressed, in rough priority order:
 
-- **Automation denial is not detected.** A refused prompt yields AppleScript error
-  `-1743` and the app just shows nothing playing, with no way to tell the user why.
-- **`PlaybackModel` has no bridge injection.** `UserDefaults` is injectable, but
-  the bridges and `LRCLibClient` are constructed inline, so the tick logic
-  (track changes, pause/resume, instrumental gaps) cannot be unit-tested.
-- **No loading state.** Between a track change and the fetch landing, the item
-  shows the idle placeholder rather than anything indicating work in progress.
-- **The login item is fragile in development.** `SMAppService.mainApp` registers
-  whatever bundle path it was run from, so a DerivedData build registers a path
-  that later disappears.
+- **`position()` cannot report a denial.** `snapshot()` carries the distinction and
+  is what drives the UI, so this is cosmetic — but the asymmetry is a trap if
+  position ever becomes the primary probe.
+- **The drift watchdog cannot grow the box mid-session** by design; the extra room
+  is only picked up on the next launch. If that ever feels stale, the fix is a
+  user-initiated "re-measure" action, not making drift bidirectional.
+- **No artwork in the popover.** Both bridges expose it over AppleScript, but
+  reading it per track would add an Apple Event round-trip on the hot path.
+- **`LoginItem` is disabled, not fixed, in development.** `SMAppService.mainApp`
+  registers whatever bundle path it was launched from, so a DerivedData build
+  would register a path that later disappears. `isSupported` detects that and
+  greys the toggle out; a release build from a stable location works normally.
