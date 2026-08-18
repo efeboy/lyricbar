@@ -144,6 +144,8 @@ Files under `LyricBar/`:
   `UpdateSpeed`, and the screen geometry the calibration starts from.
 - **`MenuBarFit.swift`** — measures how wide the item can actually be on *this*
   menu bar, by watching the real status item. See below.
+- **`FitLog.swift`** — the `os.Logger` handles and the geometry formatters the
+  width detection logs through. See "The width detection logs itself".
 - **`Lyrics/LRCLibClient.swift`** — `LRCLibClient` (`Sendable`, runs off the main
   actor).
 - **`LoginItem.swift`** — thin `SMAppService.mainApp` wrapper for the login toggle.
@@ -455,10 +457,125 @@ Because no test can prove this, verify by measurement:
   A `fittedBox.<signature>` of `(254, 1250)` means it converged and did not
   displace anyone. A value equal to the 80pt floor means every probe was
   rejected — suspect the settle/recover logic, not the geometry.
-- For anything finer, add a temporary stderr log of the frame and run the binary
-  directly (`LyricBar.app/Contents/MacOS/LyricBar 2> log`) rather than via `open`.
-  Both sweep tables above were obtained that way. **Delete the scaffold before
-  committing**, and never log lyric text.
+- For anything finer, **read the log subsystem** described in the next section —
+  it reports every probe and its verdict, with the app launched normally. That
+  replaces the throwaway stderr scaffold this section used to recommend; the two
+  sweep tables above were obtained with one, before the subsystem existed. If you
+  still need a one-off scaffold for something the categories do not cover, run the
+  binary directly (`LyricBar.app/Contents/MacOS/LyricBar 2> log`), **delete it
+  before committing**, and never log lyric text.
+
+### The width detection logs itself
+
+Width detection is the one subsystem no test can cover, so it is **permanently
+instrumented** with Apple's unified logging (`os.Logger`, `LyricBar/FitLog.swift`)
+— the mechanism Apple's documentation prescribes and which it explicitly prefers
+over `print`/`NSLog`. Three categories under subsystem `net.local.lyricbar`:
+
+- **`calibration`** — the whole `MenuBarFit.calibrate` lifecycle: `begin`,
+  `floorSettled`, `optimisticBound`, one `probe#N` line per candidate carrying its
+  verdict and the frame it was judged on, `recover`, `converged`. Around it,
+  `cacheHit`/`cacheMiss` at launch, `stored` on the defaults key, and
+  `requested`/`applied`/`noFit` from `PlaybackModel.calibrate(reason:)` — where
+  `reason` is `launch-no-cache`, `drift-squeezed` or `screen-change`.
+
+  **The `stored`/`invalidated` lines live at the `PlaybackModel` call sites, not
+  inside `MenuBarFit.store`/`invalidate`.** Those two are pure cache functions
+  that `MenuBarFitTests` drives directly with synthetic values, so logging inside
+  them put lines like `stored box=4 rightEdge=1250` into the real unified log on
+  every `xcodebuild test` — indistinguishable, during a later investigation, from
+  the fit having collapsed. `PlaybackModel` is the layer with the
+  `isRunningTests` guard, so that is where anything user-visible must be logged.
+- **`drift`** — the watchdog: `observed` (with direction and the probe count
+  toward `driftProbesBeforeRecalibration`), `settled`, `roomFreed`, and
+  `suppressed reason=cooldown`.
+- **`render`** — one line per status item render: `drew` at `.debug`, and
+  `clipped` at `.error` when the drawn text is wider than the box it went into.
+
+Watch it with the app launched normally — no terminal-attached binary, no
+scaffold to delete afterwards:
+
+```sh
+log stream --predicate 'subsystem == "net.local.lyricbar"' --level debug --style compact
+```
+
+**The levels are chosen for what survives, not for how loud they are.** Unified
+logging persists `.notice` and `.error` to disk; `.info` is memory-only and gets
+evicted, and `.debug` is not captured at all unless something is streaming. So
+the entire `calibration` and `drift` narrative — including every `probe#N`
+verdict and every `recover` — is `.notice` or `.error`, and is readable hours
+later with no streamer attached and no `log config`:
+
+```sh
+log show --predicate 'subsystem == "net.local.lyricbar"' --last 6h --style compact
+```
+
+Only the `render` category's per-render `drew` line is `.debug`, because it is
+the one high-volume signal and it is the one you can afford to lose — `clipped`,
+the render fault, is `.error` and always persists. To keep `drew` you must either
+stream while it happens (`--level debug`), or enable capture for the subsystem
+up front:
+
+```sh
+sudo log config --mode "level:debug" --subsystem net.local.lyricbar   # persists until reset
+sudo log config --reset --subsystem net.local.lyricbar
+```
+
+Do not "tidy" a `probe#N` line down to `.info`. It would still show in a live
+stream, which is exactly why the regression would go unnoticed, and it would
+vanish from every after-the-fact investigation — the only kind this subsystem
+usually gets.
+
+A healthy first-launch calibration on the reference machine, captured that way
+and trimmed to the calibration category:
+
+```
+cacheMiss signature=1728-1117-2-956-772-1-130 preference=fill
+begin floor=80 upperBound=756 leftLimit=956 padding=16
+floorSettled minX=1156 maxX=1252 width=96 rightEdge=1252
+optimisticBound start=280 span=200 resolution=8
+probe#1 box=280 verdict=rejected reason=moved-right-edge shift=69
+probe#2 box=180 verdict=accepted
+probe#3 box=230 verdict=accepted
+probe#4 box=255 verdict=accepted
+probe#5 box=268 verdict=rejected reason=moved-right-edge shift=69
+probe#6 box=262 verdict=rejected reason=moved-right-edge shift=69
+converged box=255 outcome=fitted probes=6 elapsed=1650ms
+```
+
+**Rejections are not failures.** A binary search has to reject; probes 1, 5 and 6
+are how it found the boundary. What an actual fault looks like:
+
+| line | what it means |
+| --- | --- |
+| `abandoned reason=floor-never-appeared` | our item never reached `floor + padding`. Geometry bug — suspect `length` being assigned with the padding added. Nothing is written to defaults at all: this is the empty-`fittedBox`-key case above. |
+| `converged outcome=pinned-at-floor` | every probe was rejected. Suspect the settle/recover logic, not the geometry. |
+| `probe#N reason=never-settled` | the item never took the requested width within `settleTimeout`. |
+| `probe#N reason=lost-width-during-grace` | it took the width, then lost it while `neighbourGrace` elapsed — the bar was still reflowing under it. |
+| `probe#N reason=crossed-left-limit` | the item reached left of `auxiliaryTopRightArea.minX`. |
+| `noFit` | calibration returned nil; `fittedWidth` kept its old value and nothing was cached. |
+| `clipped … probing=true` | the shipped bug from "The width is SET directly": a lyric rendered while a probe drives the box. `chars=1` on every `probing=true` line is the guard working. |
+| `clipped … probing=false fontSize=9.0` | the backstop bottomed out at the floor and still overflowed — the reflow budget is wrong, not the fit. |
+
+**Why this cannot leak a lyric.** `os.Logger` redacts dynamic strings by default
+and leaves scalars public, which happens to encode this project's
+never-log-lyric-text rule in the type system. Every `FitLog` helper takes only
+`CGFloat`, `CGRect` or `Duration`, so it is *structurally* incapable of carrying
+text, and the `render` category logs `chars=` — a count — rather than the string.
+The explicit `privacy: .public` markers exist only to un-redact those geometry
+strings. **Do not add a `FitLog` helper that takes a `String`**, and never mark a
+lyric `.public`.
+
+Two shapes elsewhere exist only to feed these lines: `DisplayState` carries a
+`String` raw value so it can name itself, and
+`MenuBarFit.crowding(_:rightEdge:leftLimit:)` reports *which* guard tripped, with
+`crowdsNeighbours` derived from it so the pure function `MenuBarFitTests` covers
+keeps its signature.
+
+The cost is a measurement per render (`fittedFontSize` plus one `textWidth`) that
+duplicates work `LyricText.attributed` already does. Renders are line changes,
+not a hot loop, and `.debug` records are dropped unless something is streaming —
+but if a future change makes `render()` fire per frame, gate `logFit` first.
 
 ### The budget is points, not characters
 
@@ -665,6 +782,7 @@ structure, counts, and geometry, not content.
 
 Prefer Swift's `async`/`await` over Combine, and framework APIs over hand-rolled
 equivalents: `SMAppService` over `launchctl`,
+`os.Logger` over `print`/`NSLog`,
 `NSFont.menuBarFont` over a hand-picked font, `NotificationCenter.notifications`
 (async sequence) over `addObserver` + `MainActor.assumeIsolated`, `Regex` literals
 over `NSRegularExpression`, `URL.appending(path:queryItems:)` over force-unwrapped

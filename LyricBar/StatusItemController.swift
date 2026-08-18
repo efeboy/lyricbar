@@ -64,7 +64,47 @@ final class StatusItemController: NSObject {
         button.setAccessibilityLabel(text)
         shownText = text
 
+        logFit(text: text, box: box, window: button.window)
+
         fade(button, to: model.displayState.opacity)
+    }
+
+    private func logFit(text: String, box: CGFloat, window: NSWindow?) {
+        let state = model.displayState
+        let lyricBox = model.lyricBoxWidth
+        let probing = box != lyricBox && state.holdsLyric
+        let size = LyricText.fittedFontSize(for: text, boxWidth: box)
+        let drawn = MenuBarMetrics.textWidth(text, fontSize: size)
+        let overflow = drawn - box
+
+        if overflow > 0.5 {
+            FitLog.render.error("""
+                clipped state=\(state.rawValue, privacy: .public) \
+                box=\(FitLog.points(box), privacy: .public) \
+                lyricBox=\(FitLog.points(lyricBox), privacy: .public) \
+                fittedWidth=\(FitLog.points(self.model.fittedWidth), privacy: .public) \
+                chars=\(text.count, privacy: .public) \
+                fontSize=\(size, format: .fixed(precision: 1), privacy: .public) \
+                floor=\(MenuBarMetrics.minimumFontSize, format: .fixed(precision: 1), privacy: .public) \
+                drawnWidth=\(FitLog.points(drawn), privacy: .public) \
+                overflow=\(FitLog.points(overflow), privacy: .public) \
+                probing=\(probing, privacy: .public) \
+                \(FitLog.geometry(window?.frame), privacy: .public)
+                """)
+            return
+        }
+
+        FitLog.render.debug("""
+            drew state=\(state.rawValue, privacy: .public) \
+            box=\(FitLog.points(box), privacy: .public) \
+            lyricBox=\(FitLog.points(lyricBox), privacy: .public) \
+            chars=\(text.count, privacy: .public) \
+            fontSize=\(size, format: .fixed(precision: 1), privacy: .public) \
+            drawnWidth=\(FitLog.points(drawn), privacy: .public) \
+            headroom=\(FitLog.points(-overflow), privacy: .public) \
+            probing=\(probing, privacy: .public) \
+            \(FitLog.geometry(window?.frame), privacy: .public)
+            """)
     }
 
     private func fade(_ button: NSStatusBarButton, to opacity: Double) {

@@ -8,6 +8,18 @@ enum MenuBarFit {
         var rightEdge: CGFloat
     }
 
+    enum Crowding: String, Sendable {
+        case movedRightEdge = "moved-right-edge"
+        case crossedLeftLimit = "crossed-left-limit"
+    }
+
+    enum ProbeOutcome: Sendable {
+        case accepted(CGRect)
+        case neverSettled
+        case lostWidth(CGRect?)
+        case crowded(Crowding, CGRect)
+    }
+
     static let probeResolution: CGFloat = 8
     private static let settleTimeout = Duration.milliseconds(700)
     private static let appearTimeout = Duration.seconds(5)
@@ -48,10 +60,14 @@ enum MenuBarFit {
         defaults.removeObject(forKey: defaultsPrefix + signature)
     }
 
+    static func crowding(_ frame: CGRect, rightEdge: CGFloat, leftLimit: CGFloat?) -> Crowding? {
+        if abs(frame.maxX - rightEdge) >= 1 { return .movedRightEdge }
+        if let leftLimit, frame.minX < leftLimit { return .crossedLeftLimit }
+        return nil
+    }
+
     static func crowdsNeighbours(_ frame: CGRect, rightEdge: CGFloat, leftLimit: CGFloat?) -> Bool {
-        if abs(frame.maxX - rightEdge) >= 1 { return true }
-        if let leftLimit, frame.minX < leftLimit { return true }
-        return false
+        crowding(frame, rightEdge: rightEdge, leftLimit: leftLimit) != nil
     }
 
     static func optimisticBound(rightEdge: CGFloat,
@@ -66,24 +82,65 @@ enum MenuBarFit {
                           leftLimit: CGFloat?,
                           apply: @MainActor (CGFloat) -> Void) async -> Fit? {
         let floor = MenuBarMetrics.minimumBoxWidth
-        guard upperBound > floor else { return nil }
+        let clock = ContinuousClock()
+        let started = clock.now
+        let key = signature()
+
+        FitLog.calibration.notice("""
+            begin signature=\(key, privacy: .public) \
+            floor=\(FitLog.points(floor), privacy: .public) \
+            upperBound=\(FitLog.points(upperBound), privacy: .public) \
+            leftLimit=\(FitLog.points(leftLimit), privacy: .public) \
+            padding=\(FitLog.points(MenuBarMetrics.systemItemPadding), privacy: .public)
+            """)
+
+        guard upperBound > floor else {
+            FitLog.calibration.error("""
+                abandoned reason=upper-bound-not-above-floor \
+                upperBound=\(FitLog.points(upperBound), privacy: .public) \
+                floor=\(FitLog.points(floor), privacy: .public)
+                """)
+            return nil
+        }
 
         apply(floor)
-        guard let base = await frame(forBox: floor, timeout: appearTimeout) else { return nil }
+        guard let base = await frame(forBox: floor, timeout: appearTimeout) else {
+            FitLog.calibration.error("""
+                abandoned reason=floor-never-appeared \
+                waited=\(FitLog.milliseconds(appearTimeout), privacy: .public)ms \
+                wantedWidth=\(FitLog.points(floor + MenuBarMetrics.systemItemPadding), privacy: .public) \
+                \(FitLog.geometry(itemFrame), privacy: .public)
+                """)
+            return nil
+        }
         let rightEdge = base.maxX
+
+        FitLog.calibration.notice("""
+            floorSettled \(FitLog.geometry(base), privacy: .public) \
+            rightEdge=\(FitLog.points(rightEdge), privacy: .public)
+            """)
 
         var fitting = floor
         var crowding = optimisticBound(rightEdge: rightEdge,
                                        leftLimit: leftLimit,
                                        upperBound: upperBound)
+        var probes = 0
 
-        if await accepts(crowding, rightEdge: rightEdge, leftLimit: leftLimit, apply: apply) {
+        FitLog.calibration.notice("""
+            optimisticBound start=\(FitLog.points(crowding), privacy: .public) \
+            span=\(FitLog.points(crowding - fitting), privacy: .public) \
+            resolution=\(FitLog.points(probeResolution), privacy: .public)
+            """)
+
+        if await accepts(crowding, rightEdge: rightEdge, leftLimit: leftLimit,
+                         index: &probes, apply: apply) {
             fitting = crowding
         } else {
             await recover(to: fitting, apply: apply)
             while crowding - fitting > probeResolution {
                 let candidate = ((fitting + crowding) / 2).rounded()
-                if await accepts(candidate, rightEdge: rightEdge, leftLimit: leftLimit, apply: apply) {
+                if await accepts(candidate, rightEdge: rightEdge, leftLimit: leftLimit,
+                                 index: &probes, apply: apply) {
                     fitting = candidate
                 } else {
                     crowding = candidate
@@ -93,25 +150,108 @@ enum MenuBarFit {
         }
 
         apply(fitting)
-        _ = await frame(forBox: fitting, timeout: settleTimeout)
+        let settled = await frame(forBox: fitting, timeout: settleTimeout)
+
+        if fitting == floor {
+            FitLog.calibration.error("""
+                converged box=\(FitLog.points(fitting), privacy: .public) \
+                outcome=pinned-at-floor probes=\(probes, privacy: .public) \
+                rightEdge=\(FitLog.points(rightEdge), privacy: .public) \
+                elapsed=\(FitLog.milliseconds(started.duration(to: clock.now)), privacy: .public)ms \
+                \(FitLog.geometry(settled), privacy: .public)
+                """)
+        } else {
+            FitLog.calibration.notice("""
+                converged box=\(FitLog.points(fitting), privacy: .public) \
+                outcome=fitted probes=\(probes, privacy: .public) \
+                rightEdge=\(FitLog.points(rightEdge), privacy: .public) \
+                elapsed=\(FitLog.milliseconds(started.duration(to: clock.now)), privacy: .public)ms \
+                \(FitLog.geometry(settled), privacy: .public)
+                """)
+        }
+
         return Fit(boxWidth: fitting, rightEdge: rightEdge)
     }
 
     private static func accepts(_ box: CGFloat,
                                 rightEdge: CGFloat,
                                 leftLimit: CGFloat?,
+                                index: inout Int,
                                 apply: @MainActor (CGFloat) -> Void) async -> Bool {
+        index += 1
+        let number = index
+        let outcome = await probe(box, rightEdge: rightEdge, leftLimit: leftLimit, apply: apply)
+
+        switch outcome {
+        case .accepted(let frame):
+            FitLog.calibration.notice("""
+                probe#\(number, privacy: .public) box=\(FitLog.points(box), privacy: .public) \
+                verdict=accepted \(FitLog.geometry(frame), privacy: .public)
+                """)
+            return true
+
+        case .neverSettled:
+            FitLog.calibration.error("""
+                probe#\(number, privacy: .public) box=\(FitLog.points(box), privacy: .public) \
+                verdict=rejected reason=never-settled \
+                waited=\(FitLog.milliseconds(settleTimeout), privacy: .public)ms \
+                wantedWidth=\(FitLog.points(box.rounded() + MenuBarMetrics.systemItemPadding), privacy: .public) \
+                \(FitLog.geometry(itemFrame), privacy: .public)
+                """)
+            return false
+
+        case .lostWidth(let frame):
+            FitLog.calibration.error("""
+                probe#\(number, privacy: .public) box=\(FitLog.points(box), privacy: .public) \
+                verdict=rejected reason=lost-width-during-grace \
+                grace=\(FitLog.milliseconds(neighbourGrace), privacy: .public)ms \
+                wantedWidth=\(FitLog.points(box.rounded() + MenuBarMetrics.systemItemPadding), privacy: .public) \
+                \(FitLog.geometry(frame), privacy: .public)
+                """)
+            return false
+
+        case .crowded(let reason, let frame):
+            FitLog.calibration.notice("""
+                probe#\(number, privacy: .public) box=\(FitLog.points(box), privacy: .public) \
+                verdict=rejected reason=\(reason.rawValue, privacy: .public) \
+                \(FitLog.geometry(frame), privacy: .public) \
+                expectedRightEdge=\(FitLog.points(rightEdge), privacy: .public) \
+                shift=\(FitLog.points(frame.maxX - rightEdge), privacy: .public) \
+                leftLimit=\(FitLog.points(leftLimit), privacy: .public)
+                """)
+            return false
+        }
+    }
+
+    private static func probe(_ box: CGFloat,
+                              rightEdge: CGFloat,
+                              leftLimit: CGFloat?,
+                              apply: @MainActor (CGFloat) -> Void) async -> ProbeOutcome {
         apply(box)
-        guard await frame(forBox: box, timeout: settleTimeout) != nil else { return false }
+        guard await frame(forBox: box, timeout: settleTimeout) != nil else { return .neverSettled }
         try? await Task.sleep(for: neighbourGrace)
-        guard let frame = itemFrame, matches(frame, box: box) else { return false }
-        return !crowdsNeighbours(frame, rightEdge: rightEdge, leftLimit: leftLimit)
+        guard let frame = itemFrame, matches(frame, box: box) else { return .lostWidth(itemFrame) }
+        if let reason = crowding(frame, rightEdge: rightEdge, leftLimit: leftLimit) {
+            return .crowded(reason, frame)
+        }
+        return .accepted(frame)
     }
 
     private static func recover(to box: CGFloat, apply: @MainActor (CGFloat) -> Void) async {
         apply(box)
-        _ = await frame(forBox: box, timeout: settleTimeout)
+        let settled = await frame(forBox: box, timeout: settleTimeout)
         try? await Task.sleep(for: neighbourGrace)
+        if settled == nil {
+            FitLog.calibration.error("""
+                recover box=\(FitLog.points(box), privacy: .public) outcome=never-settled \
+                \(FitLog.geometry(itemFrame), privacy: .public)
+                """)
+        } else {
+            FitLog.calibration.notice("""
+                recover box=\(FitLog.points(box), privacy: .public) outcome=settled \
+                \(FitLog.geometry(itemFrame), privacy: .public)
+                """)
+        }
     }
 
     private static func matches(_ frame: CGRect, box: CGFloat) -> Bool {
