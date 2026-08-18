@@ -410,7 +410,30 @@ never reach left of `auxiliaryTopRightArea.minX`.
   always approached from below, from a settled state.
 - **Waiting for our own width is not waiting for the layout.** `frame(forBox:)`
   returns as soon as *our* item is the requested size; the neighbours may still
-  be animating. Hence `neighbourGrace` (140ms) before the verdict is read.
+  be animating, and **our own origin may not have moved yet**. Hence
+  `neighbourGrace` (140ms) before any geometry is read.
+
+  That grace originally guarded only the probe verdicts, and **not the floor
+  measurement every probe is compared against** — which shipped a bug that
+  collapsed the item to 80pt in the field. Reproduced from the logs: a drift
+  recalibration starts while the item is 271pt wide at `minX=981`; shrinking it
+  to 96 changes the width immediately but leaves the origin stale for ~150ms, so
+  the baseline read landed as `width=96` at `minX=981` and computed
+  `rightEdge = 1077` instead of 1252. Every probe was then judged against a right
+  edge 175pt off, all were rejected, and the search pinned at the floor. It never
+  showed on a cold launch, where the item goes 32→80pt with no wide layout to
+  unwind, so both origin and width settle together.
+
+  The fix is structural rather than another sleep: **`settle(at:timeout:apply:)`
+  is now the only way geometry is read.** It applies the width, waits for the
+  width to match, waits `neighbourGrace`, then re-reads and re-validates, and
+  returns both the `arrived` and the `settled` frame. `calibrate`'s floor
+  baseline, `probe` and `recover` all go through it. If you add a fourth reader,
+  route it through `settle` too — do not call `frame(forBox:)` directly.
+  `floorRelaidOut` logs the `arrived` → `settled` correction whenever it is
+  non-zero, which is how you confirm the guard is doing work: a drift-triggered
+  recalibration on the reference machine logs
+  `arrivedMaxX=1077 settledMaxX=1252 shift=175`.
 
 On the reference machine this converges to **254pt** — against the 556pt that the
 old hard-coded `otherItemsReserve: 200` produced. That constant was wrong by
@@ -553,6 +576,8 @@ are how it found the boundary. What an actual fault looks like:
 | `probe#N reason=never-settled` | the item never took the requested width within `settleTimeout`. |
 | `probe#N reason=lost-width-during-grace` | it took the width, then lost it while `neighbourGrace` elapsed — the bar was still reflowing under it. |
 | `probe#N reason=crossed-left-limit` | the item reached left of `auxiliaryTopRightArea.minX`. |
+| `abandoned reason=floor-lost-width-during-grace` | the baseline reached the floor width and lost it again before settling. The bar is thrashing; nothing is cached and the old `fittedWidth` is kept. |
+| `floorRelaidOut shift=…` | **not a fault** — the settle guard corrected a stale origin on the baseline read. Expect it on drift-triggered recalibrations, never on a cold launch. A large `shift` here is exactly the bug that used to pin the fit at the floor. |
 | `noFit` | calibration returned nil; `fittedWidth` kept its old value and nothing was cached. |
 | `clipped … probing=true` | the shipped bug from "The width is SET directly": a lyric rendered while a probe drives the box. `chars=1` on every `probing=true` line is the guard working. |
 | `clipped … probing=false fontSize=9.0` | the backstop bottomed out at the floor and still overflowed — the reflow budget is wrong, not the fit. |

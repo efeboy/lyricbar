@@ -13,6 +13,11 @@ enum MenuBarFit {
         case crossedLeftLimit = "crossed-left-limit"
     }
 
+    enum SettleFailure: Error, Sendable {
+        case neverSettled
+        case lostWidth
+    }
+
     enum ProbeOutcome: Sendable {
         case accepted(CGRect)
         case neverSettled
@@ -103,20 +108,39 @@ enum MenuBarFit {
             return nil
         }
 
-        apply(floor)
-        guard let base = await frame(forBox: floor, timeout: appearTimeout) else {
-            FitLog.calibration.error("""
-                abandoned reason=floor-never-appeared \
-                waited=\(FitLog.milliseconds(appearTimeout), privacy: .public)ms \
-                wantedWidth=\(FitLog.points(floor + MenuBarMetrics.systemItemPadding), privacy: .public) \
-                \(FitLog.geometry(itemFrame), privacy: .public)
-                """)
+        let baseline = await settle(at: floor, timeout: appearTimeout, apply: apply)
+        guard case .success(let base) = baseline else {
+            if case .failure(.lostWidth) = baseline {
+                FitLog.calibration.error("""
+                    abandoned reason=floor-lost-width-during-grace \
+                    grace=\(FitLog.milliseconds(neighbourGrace), privacy: .public)ms \
+                    wantedWidth=\(FitLog.points(floor + MenuBarMetrics.systemItemPadding), privacy: .public) \
+                    \(FitLog.geometry(itemFrame), privacy: .public)
+                    """)
+            } else {
+                FitLog.calibration.error("""
+                    abandoned reason=floor-never-appeared \
+                    waited=\(FitLog.milliseconds(appearTimeout), privacy: .public)ms \
+                    wantedWidth=\(FitLog.points(floor + MenuBarMetrics.systemItemPadding), privacy: .public) \
+                    \(FitLog.geometry(itemFrame), privacy: .public)
+                    """)
+            }
             return nil
         }
-        let rightEdge = base.maxX
+        let rightEdge = base.settled.maxX
+        let baselineShift = base.settled.maxX - base.arrived.maxX
+
+        if abs(baselineShift) >= 1 {
+            FitLog.calibration.notice("""
+                floorRelaidOut arrivedMaxX=\(FitLog.points(base.arrived.maxX), privacy: .public) \
+                settledMaxX=\(FitLog.points(base.settled.maxX), privacy: .public) \
+                shift=\(FitLog.points(baselineShift), privacy: .public) \
+                grace=\(FitLog.milliseconds(neighbourGrace), privacy: .public)ms
+                """)
+        }
 
         FitLog.calibration.notice("""
-            floorSettled \(FitLog.geometry(base), privacy: .public) \
+            floorSettled \(FitLog.geometry(base.settled), privacy: .public) \
             rightEdge=\(FitLog.points(rightEdge), privacy: .public)
             """)
 
@@ -227,28 +251,45 @@ enum MenuBarFit {
                               rightEdge: CGFloat,
                               leftLimit: CGFloat?,
                               apply: @MainActor (CGFloat) -> Void) async -> ProbeOutcome {
-        apply(box)
-        guard await frame(forBox: box, timeout: settleTimeout) != nil else { return .neverSettled }
-        try? await Task.sleep(for: neighbourGrace)
-        guard let frame = itemFrame, matches(frame, box: box) else { return .lostWidth(itemFrame) }
-        if let reason = crowding(frame, rightEdge: rightEdge, leftLimit: leftLimit) {
-            return .crowded(reason, frame)
+        switch await settle(at: box, timeout: settleTimeout, apply: apply) {
+        case .failure(.neverSettled):
+            return .neverSettled
+        case .failure(.lostWidth):
+            return .lostWidth(itemFrame)
+        case .success(let frames):
+            if let reason = crowding(frames.settled, rightEdge: rightEdge, leftLimit: leftLimit) {
+                return .crowded(reason, frames.settled)
+            }
+            return .accepted(frames.settled)
         }
-        return .accepted(frame)
+    }
+
+    private static func settle(
+        at box: CGFloat,
+        timeout: Duration,
+        apply: @MainActor (CGFloat) -> Void
+    ) async -> Result<(arrived: CGRect, settled: CGRect), SettleFailure> {
+        apply(box)
+        guard let arrived = await frame(forBox: box, timeout: timeout) else {
+            return .failure(.neverSettled)
+        }
+        try? await Task.sleep(for: neighbourGrace)
+        guard let settled = itemFrame, matches(settled, box: box) else {
+            return .failure(.lostWidth)
+        }
+        return .success((arrived, settled))
     }
 
     private static func recover(to box: CGFloat, apply: @MainActor (CGFloat) -> Void) async {
-        apply(box)
-        let settled = await frame(forBox: box, timeout: settleTimeout)
-        try? await Task.sleep(for: neighbourGrace)
-        if settled == nil {
-            FitLog.calibration.error("""
-                recover box=\(FitLog.points(box), privacy: .public) outcome=never-settled \
-                \(FitLog.geometry(itemFrame), privacy: .public)
-                """)
-        } else {
+        switch await settle(at: box, timeout: settleTimeout, apply: apply) {
+        case .success(let frames):
             FitLog.calibration.notice("""
                 recover box=\(FitLog.points(box), privacy: .public) outcome=settled \
+                \(FitLog.geometry(frames.settled), privacy: .public)
+                """)
+        case .failure:
+            FitLog.calibration.error("""
+                recover box=\(FitLog.points(box), privacy: .public) outcome=never-settled \
                 \(FitLog.geometry(itemFrame), privacy: .public)
                 """)
         }
