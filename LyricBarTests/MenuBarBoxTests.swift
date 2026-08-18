@@ -10,9 +10,8 @@ struct MenuBarBoxTests {
     private static let box: CGFloat = 280
 
     private func drawnWidth(_ text: String,
-                            opacity: Double = 1.0,
                             box: CGFloat = MenuBarBoxTests.box) -> CGFloat {
-        LyricText.attributed(text: text, boxWidth: box, alpha: opacity).size().width
+        LyricText.attributed(text: text, boxWidth: box).size().width
     }
 
     private static let states: [(name: String, text: String, state: PlaybackModel.DisplayState)] = [
@@ -63,7 +62,7 @@ struct MenuBarBoxTests {
 
     @Test("The lyric is centered, and clipped rather than ellipsized")
     func centeredAndNeverEllipsized() throws {
-        let drawn = LyricText.attributed(text: "Girl", boxWidth: Self.box, alpha: 1)
+        let drawn = LyricText.attributed(text: "Girl", boxWidth: Self.box)
         let paragraph = try #require(
             drawn.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
 
@@ -93,19 +92,23 @@ struct MenuBarBoxTests {
         #expect(size <= MenuBarMetrics.baseFontSize)
     }
 
-    @Test("A dimmed state reaches the drawn text as a dimmed colour")
-    func opacityReachesTheText() throws {
-        func alpha(_ opacity: Double) throws -> CGFloat {
-            let drawn = LyricText.attributed(text: "Girl", boxWidth: Self.box, alpha: opacity)
-            let colour = try #require(
-                drawn.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
-            return colour.alphaComponent
-        }
+    @Test("Opacity belongs to the view, not the text, so it can animate")
+    func opacityIsNotBakedIntoTheText() throws {
+        let drawn = LyricText.attributed(text: "Girl", boxWidth: Self.box)
+        let colour = try #require(
+            drawn.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
 
-        let idle = try alpha(PlaybackModel.DisplayState.idle.opacity)
-        let playing = try alpha(PlaybackModel.DisplayState.playing.opacity)
+        #expect(colour == NSColor.labelColor)
+    }
 
-        #expect(idle < playing)
+    @Test("Dimmed states rank below playing, which stays full strength")
+    func dimmedStatesRankBelowPlaying() {
+        let idle = PlaybackModel.DisplayState.idle.opacity
+        let paused = PlaybackModel.DisplayState.paused.opacity
+        let playing = PlaybackModel.DisplayState.playing.opacity
+
+        #expect(idle < paused)
+        #expect(paused < playing)
         #expect(playing == 1.0)
     }
 

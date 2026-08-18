@@ -62,7 +62,7 @@ Login Items.
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-74 tests in 9 Swift Testing suites:
+75 tests in 9 Swift Testing suites:
 
 - **`LRCParserTests`** — the LRC grammar (fraction separators and digit counts,
   repeated chorus timestamps, CRLF payloads) and `index(at:)` boundaries.
@@ -80,8 +80,9 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 - **`MenuBarBoxTests`** — what `LyricText` alone guarantees: the fitted font size
   stays inside `[minimumFontSize, baseFontSize]` for every state and every content
   shape, a line too wide to shrink bottoms out at the floor, the paragraph style is
-  centered and `.byClipping` (never ellipsized), and `DisplayState.opacity` reaches
-  the drawn colour. It does **not** assert that arbitrary text fits the box —
+  centered and `.byClipping` (never ellipsized), the drawn colour is a
+  full-strength `labelColor` (opacity lives on the view, not the text), and the
+  dimmed states rank below `.playing`. It does **not** assert that arbitrary text fits the box —
   nothing promises that, and asserting it here fails on raw unreflowed lines. The
   end-to-end fit guarantee is `NoTruncationTests`, on reflowed chunks.
 - **`MenuBarFitTests`** — the pure half of the fit calibration:
@@ -192,8 +193,9 @@ idle / no lyrics found / paused:
 Centering is what stops the *apparent* movement once the width is genuinely
 fixed: left-aligned text starts at the same edge every line and ends somewhere
 new, so the block still reads as shifting. Centered, all lines share a midpoint.
-The states are told apart by `DisplayState.opacity`, baked into the image's alpha
-because a template image uses alpha as its tint mask.
+The states are told apart by `DisplayState.opacity`, applied to the button's
+`alphaValue` — see the animation section below for why it lives there and not in
+the text's colour.
 
 **The collapse is not a weakening of the fixed box — read `DisplayState.holdsLyric`
 before touching it.** The box exists to stop *line-to-line* jitter, and it still
@@ -262,6 +264,49 @@ asserted `NSHostingView(...).fittingSize` — which faithfully reports whatever
 width is pinned on a SwiftUI view and has nothing to do with what AppKit gives the
 status item. If you ever see `fittingSize` in a test here again, it is measuring
 the wrong thing.
+
+### The item animates, and only because it is a view now
+
+Two animations, both Core Animation on the button's backing layer
+(`wantsLayer = true`), both measured on the live item before being written down:
+
+- **Line changes crossfade.** A `CATransition` (`.fade`, `lineCrossfade` 0.18s) is
+  added to the layer immediately before `attributedTitle` is assigned — but **only
+  when the text actually changed**. Width-only renders must not crossfade, and
+  every calibration probe is one, so without that guard the item flickers through
+  the whole binary search.
+- **State changes fade the item.** `DisplayState.opacity` goes to
+  `button.animator().alphaValue` inside an `NSAnimationContext` of `stateFade`
+  (0.35s), again only when the value changed. The *first* render assigns
+  `alphaValue` directly, so the item does not fade up from nothing on launch.
+
+**`DisplayState.opacity` is the view's alpha, not the text's colour.**
+`LyricText.attributed` always uses a full-strength `NSColor.labelColor`. Applying
+opacity in both places would multiply them (0.3 x 0.3 = 0.09), and `alphaValue` is
+the animatable one — `NSView.alphaValue` is documented as "the opacity value from
+the view's layer". That is the whole reason it moved.
+
+Measured on the live item, because none of it is testable:
+
+```
+wantsLayer = true            ->  NSViewBackingLayer
+animator().alphaValue = 0.15 over 1.5s
+  model.opacity     0.150 immediately
+  presentation      0.712 -> 0.435 -> 0.275 -> 0.179 -> 0.152
+CAGradientLayer assigned to layer.mask survives an attributedTitle change,
+  with layer identity unchanged across it
+```
+
+That last line is what matters for anything further: **AppKit does not rebuild the
+backing layer when the title changes**, so a mask survives every lyric update. A
+karaoke-style sweep is therefore a `CAGradientLayer` mask with animated
+`locations` — GPU work, no per-frame text rebuild. Its `frame` would need resetting
+in `render()` whenever `statusItem.length` changes, since a mask does not track its
+host.
+
+`attributedTitle` itself is **not** animatable; there is no interpolation between
+two strings. Every text change is a discrete swap, and the crossfade animates the
+rendered result *around* it rather than through it.
 
 ### There is no icon
 
