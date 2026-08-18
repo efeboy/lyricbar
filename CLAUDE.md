@@ -5,10 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 LyricBar is a macOS menu bar app that shows time-synced lyrics for whatever
-**Spotify or Apple Music** is currently playing. It is a SwiftUI `MenuBarExtra`
-app with no third-party dependencies. Sources live under `LyricBar/`; the app is
-built from `LyricBar.xcodeproj`, a standard Xcode **macOS App target** (not SwiftPM
-— an app bundle is required for `MenuBarExtra` and `SMAppService`).
+**Spotify or Apple Music** is currently playing. The menu bar item is a
+hand-rolled `NSStatusItem` owned by `StatusItemController`; the popover is a
+SwiftUI view hosted in an `NSPopover`. No third-party dependencies. Sources live
+under `LyricBar/`; the app is built from `LyricBar.xcodeproj`, a standard Xcode
+**macOS App target** (not SwiftPM — an app bundle is required for a status item
+and `SMAppService`).
 
 ## THE SOURCE HAS NO COMMENTS — THIS FILE IS WHERE THE "WHY" LIVES
 
@@ -29,8 +31,8 @@ no `swift build` step and no `launchctl`/`codesign` deploy dance.
 The target is already configured this way; each of these is load-bearing, so
 don't "clean them up":
 
-- Deployment target **macOS 14.0** (`MenuBarExtra`/`SMAppService` are 13+, but the
-  `@Observable` model requires 14).
+- Deployment target **macOS 14.0** (`SMAppService` is 13+, but the `@Observable`
+  model and the no-argument `NSApp.activate()` both require 14).
 - Bundle identifier **`net.local.lyricbar`** — `SMAppService.mainApp` keys off it.
 - **Hardened Runtime on**, **App Sandbox off** (`ENABLE_APP_SANDBOX = NO`),
   entitlements at `LyricBar/LyricBar.entitlements` (sending Apple Events to
@@ -60,7 +62,7 @@ Login Items.
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-71 tests in 8 Swift Testing suites:
+74 tests in 9 Swift Testing suites:
 
 - **`LRCParserTests`** — the LRC grammar (fraction separators and digit counts,
   repeated chorus timestamps, CRLF payloads) and `index(at:)` boundaries.
@@ -141,10 +143,18 @@ Files under `LyricBar/`:
 - **`LoginItem.swift`** — thin `SMAppService.mainApp` wrapper for the login toggle.
 - **`PlaybackModel.swift`** — `@MainActor @Observable`; owns the poll loop, source
   selection, position extrapolation, the per-track fetch task, and the fit.
-- **`LyricImage.swift`** — draws the lyric centered into the fixed-size template
-  image the status item actually sizes itself from, shrinking the font if needed.
-- **`LyricBarApp.swift`** — the `MenuBarExtra` scene: the label (the lyric image),
-  the popover, and the options pull-down.
+- **`LyricText.swift`** — builds the centered `NSAttributedString` the status item
+  button displays, at the font size `LyricImage.fittedFontSize` picks.
+- **`LyricImage.swift`** — **legacy.** Only `fittedFontSize` is still live (called
+  by `LyricText` and the reflow tests); `render` is now unused by the app and is
+  kept solely because `MenuBarBoxTests` still asserts against it. Both go when
+  those tests are re-pointed at `LyricText`.
+- **`StatusItemController.swift`** — owns the `NSStatusItem`, sets `length` and the
+  button's `attributedTitle`, hosts the popover, and pushes model changes to the
+  item via `withObservationTracking`.
+- **`LyricBarApp.swift`** — the `App` entry point: a `Settings` scene to satisfy
+  SwiftUI's need for one, an `NSApplicationDelegateAdaptor` that creates the
+  controller, and the popover and options pull-down views.
 
 ### Source selection
 
@@ -205,42 +215,67 @@ The placeholder width comes from `MenuBarMetrics.placeholderBoxWidth(for:)`, wit
 a `minimumPlaceholderWidth` floor so the item stays comfortably clickable — the
 popover is only reachable through it.
 
-### `MenuBarExtra` IGNORES a frame pinned on its label — the lyric must be an image
+### The width is SET directly, and the lyric is real text
 
-This is the single most expensive thing to relearn in this codebase. A
-`.frame(width:)` on the label view has no effect on the status item, which sizes
-itself to the label's content. Measured on the live item with the label framed at
-572pt:
+The item is an `NSStatusItem` created in `StatusItemController`. Its width is
+`statusItem.length`, assigned outright, and the lyric is the button's
+`attributedTitle` — real text, which stays crisp at any scale, follows the system
+appearance via `NSColor.labelColor`, and is what VoiceOver reads.
+
+**Measured: the system adds `systemItemPadding` (16pt) on top of `length`.** So
+`length` is the *content* width, not the on-screen footprint:
+
+```
+length   32    48    80    96
+window   48    64    96   112      <- always length + 16
+```
+
+That is why `render()` assigns `statusItem.length = box` with nothing added, and
+why `MenuBarFit.matches` still compares the window frame against
+`box + systemItemPadding`. Assigning `length = box + padding` instead makes every
+probe miss by 16pt: the floor never "appears", `calibrate` returns nil, and **no
+fit is written at all**. Its signature is an *empty* `fittedBox` key — distinct
+from a fit pinned at the 80pt floor, which means the probes ran and were all
+rejected. That distinction is the fastest way to tell a geometry bug from a
+settle/recover bug.
+
+Note `NSStatusItem.title` and `attributedTitle` are **deprecated**; the live path
+is `statusItem.button?.attributedTitle`, the inherited `NSButton` property.
+
+**Why this used to be an image.** Under `MenuBarExtra` there was no `length` to
+set — its entire public API is eight initializers, none of which expose the
+underlying `NSStatusItem`. A `.frame(width:)` on the label was ignored and the
+item sized itself to the label's content. Measured then, framed at 572pt:
 
 ```
 chars    1     4    12    30    60    90
-item   28pt  51pt 111pt 246pt 471pt 696pt      ← frame pinned at 572pt, ignored
+item   28pt  51pt 111pt 246pt 471pt 696pt      <- frame pinned at 572pt, ignored
 ```
 
-**What the item does honor is an image's dimensions.** `LyricImage.render` draws
-the lyric centered into a `boxWidth`-wide template image, and the same sweep then
-reads a constant 588pt across every string length. Do not replace that `Image`
-with a `Text`, however much tidier it looks.
+An image's *dimensions* were honored where a frame was not, so a fixed-size
+template image was the only lever available. That workaround is gone. Do not
+reintroduce it, and do not reintroduce `MenuBarExtra` to "simplify" the scene.
 
-This was believed fixed once before, wrongly, because `MenuBarBoxTests` asserted
-`NSHostingView(...).fittingSize` — which faithfully reports whatever width is
-pinned on a SwiftUI view and has nothing to do with what AppKit gives the status
-item. If you ever see `fittingSize` in a test here again, it is measuring the
-wrong thing.
+This was also believed fixed once before, wrongly, because `MenuBarBoxTests`
+asserted `NSHostingView(...).fittingSize` — which faithfully reports whatever
+width is pinned on a SwiftUI view and has nothing to do with what AppKit gives the
+status item. If you ever see `fittingSize` in a test here again, it is measuring
+the wrong thing.
 
 ### There is no icon
 
 The old `quote.closing` glyph existed to stop an empty lyric collapsing to a
-zero-width, unclickable item; a fixed-size image guarantees that regardless of
-the string, and a permanent glyph beside text the user is reading just competes
+zero-width, unclickable item; an explicitly-set `length` guarantees that
+regardless of the string, and a permanent glyph beside text the user is reading just competes
 with it. What replaces it is an invariant one level up: `PlaybackModel.lineText`
 is a computed property that **can never be empty** — every "nothing to read" case
 falls back to `♪`, so the box always has something visible and the popover is
 always reachable. Keep that guarantee where it is; scattering placeholder
 assignments across the tick branches is what it replaced.
 
-`LyricLabel` takes plain values, not the model — that is what lets a test drive
-every state.
+`LyricText.attributed` takes plain values, not the model — that is what lets a
+test drive every state. Keep it that way: `StatusItemController.render` is the
+only place the two are joined.
 
 ### The width is MEASURED, not guessed (`MenuBarFit`)
 
@@ -331,8 +366,10 @@ optional:
   with a visible resize, and a width that changes under the user while they are
   reading is the complaint this whole subsystem started from.
 
-`MenuBarExtra` does not expose its `NSStatusItem`, so the item's *position among
-other apps' items* is not controllable — don't write geometry that needs it.
+We own the `NSStatusItem` now, but its *position among other apps' items* is still
+chosen by the system — don't write geometry that needs it. `MenuBarFit.itemFrame`
+also still locates the window by `className.contains("StatusBar")`; that works, but
+it is now reachable directly as `statusItem.button?.window` and should be switched.
 
 ### Verifying against the live item
 
@@ -486,14 +523,16 @@ directly via `@Bindable` while the setter still persists to `UserDefaults` and
 rebuilds the reflow. Do not "simplify" them into plain stored properties with
 observers.
 
-**The scene is `.menuBarExtraStyle(.window)`, and that has consequences.** The
-`.menu` style would give menu rows for free but cannot show the track header and
-the previous/current/next triplet. The cost is that `MenuBarExtra` then has **no
-right-click menu** — both mouse buttons open the popover, and SwiftUI exposes no
-secondary-menu hook. Settings and Quit therefore live in an ellipsis `Menu` inside
-the popover header, which AppKit still renders as a real NSMenu. Getting true
-right-click would mean a hand-rolled `NSStatusItem`; don't reintroduce one for
-that alone.
+**We own the popover, so we own its lifecycle.** `NSPopover` with
+`behavior = .transient` handles dismissal on an outside click; `togglePopover`
+handles the item's own click, and calls `NSApp.activate()` first so the popover
+can take key focus from an `LSUIElement` app. A menu row style was never an option
+— it cannot show the track header and the previous/current/next triplet.
+
+Settings and Quit still live in an ellipsis `Menu` inside the popover header.
+Now that the item is hand-rolled, a **real right-click menu is finally reachable**
+(`statusItem.menu`, or distinguishing the button's mouse event) — it is simply not
+wired up yet.
 
 **The popover shows the song and its lyrics, nothing else.** No transport, no
 seek, no progress — this is a lyrics-only tool and the bridges are read-only by
@@ -552,7 +591,7 @@ and artist only. Diagnostics — including test failure messages — report timi
 structure, counts, and geometry, not content.
 
 Prefer Swift's `async`/`await` over Combine, and framework APIs over hand-rolled
-equivalents: `MenuBarExtra` over `NSStatusItem`, `SMAppService` over `launchctl`,
+equivalents: `SMAppService` over `launchctl`,
 `NSFont.menuBarFont` over a hand-picked font, `NotificationCenter.notifications`
 (async sequence) over `addObserver` + `MainActor.assumeIsolated`, `Regex` literals
 over `NSRegularExpression`, `URL.appending(path:queryItems:)` over force-unwrapped
@@ -596,6 +635,16 @@ awaits the per-track fetch `Task`. Prefer driving those over adding sleeps.
 ## Known gaps
 
 Not yet addressed, in rough priority order:
+
+- **The popover's click behaviour is unverified.** The geometry and the fit
+  calibration were measured end-to-end, but opening, closing and re-opening the
+  popover by clicking the item was not. `NSPopover.behavior = .transient` has a
+  known wrinkle where the dismissing click also fires the button action and
+  immediately reopens it. If that shows up, the fix is `.applicationDefined` plus
+  an `NSEvent` global monitor for outside clicks, not a timestamp guard.
+- **`LyricImage.render` is dead code kept alive by its tests.** Re-point
+  `MenuBarBoxTests` at `LyricText`/`statusItem.length` and delete both it and
+  `LyricImage.barHeight`; move `fittedFontSize` into `LyricText`.
 
 - **`position()` cannot report a denial.** `snapshot()` carries the distinction and
   is what drives the UI, so this is cosmetic — but the asymmetry is a trap if

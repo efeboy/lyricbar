@@ -167,7 +167,7 @@ final class PlaybackModel {
         if cached == nil { calibrate() }
     }
 
-    private static var isRunningTests: Bool {
+    static var isRunningTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || NSClassFromString("XCTestCase") != nil
     }

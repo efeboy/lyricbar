@@ -3,32 +3,27 @@ import AppKit
 
 @main
 struct LyricBarApp: App {
-    @State private var model = PlaybackModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra {
-            LyricPopover(model: model)
-        } label: {
-            LyricLabel(text: model.lineText,
-                       boxWidth: model.boxWidth,
-                       opacity: model.displayState.opacity)
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window)
     }
 }
 
-struct LyricLabel: View {
-    var text: String
-    var boxWidth: CGFloat
-    var opacity: Double
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    var body: some View {
-        Image(nsImage: LyricImage.render(text: text, boxWidth: boxWidth, alpha: opacity))
-            .accessibilityLabel(text)
+    private var controller: StatusItemController?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !PlaybackModel.isRunningTests else { return }
+        controller = StatusItemController(model: PlaybackModel())
     }
 }
 
-private struct LyricPopover: View {
+struct LyricPopover: View {
     var model: PlaybackModel
 
     var body: some View {
