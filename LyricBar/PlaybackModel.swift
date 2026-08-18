@@ -7,8 +7,16 @@ import Observation
 final class PlaybackModel {
 
     var lineText: String {
-        if !chunk.isEmpty { return chunk }
-        return displayState == .denied ? Self.deniedPlaceholder : Self.gapPlaceholder
+        PlaybackModel.displayText(chunk: chunk,
+                                  probing: probeWidth != nil,
+                                  state: displayState)
+    }
+
+    static func displayText(chunk: String, probing: Bool, state: DisplayState) -> String {
+        guard !probing, state.holdsLyric, !chunk.isEmpty else {
+            return state == .denied ? deniedPlaceholder : gapPlaceholder
+        }
+        return chunk
     }
 
     private(set) var header = PlaybackModel.startingHeader

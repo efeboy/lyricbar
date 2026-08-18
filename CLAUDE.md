@@ -62,7 +62,7 @@ Login Items.
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-75 tests in 9 Swift Testing suites:
+81 tests in 9 Swift Testing suites:
 
 - **`LRCParserTests`** — the LRC grammar (fraction separators and digit counts,
   repeated chorus timestamps, CRLF payloads) and `index(at:)` boundaries.
@@ -318,6 +318,27 @@ is a computed property that **can never be empty** — every "nothing to read" c
 falls back to `♪`, so the box always has something visible and the popover is
 always reachable. Keep that guarantee where it is; scattering placeholder
 assignments across the tick branches is what it replaced.
+
+That decision is `PlaybackModel.displayText(chunk:probing:state:)`, a **static
+function over plain values** so tests can drive every combination — the same reason
+`LyricText.attributed` does not take the model. It returns the placeholder unless
+all three hold: not probing, the state `holdsLyric`, and the chunk is non-empty.
+
+**The `probing:` argument is not politeness, it is a shipped bug.** `boxWidth` is
+`probeWidth ?? (holdsLyric ? lyricBoxWidth : placeholderWidth)`, so a calibration
+probe *overrides* the box down to as little as the 80pt floor — while `menuLines`
+is still reflowed for the old budget, because `applyFittedWidth()` only rebuilds it
+*after* calibration finishes. Render a lyric in that window and `fittedFontSize`
+bottoms out at 9pt, the text still overflows, and `.byClipping` clips it mid-word.
+Observed live as `Somewher` in a ~40pt item, when FaceTime added a status item
+mid-song and the drift watchdog recalibrated underneath the lyric.
+
+Measured across a launch calibration with music playing, the box walks
+32 → 80 → 268 → 80 → 174 → 174 → 221 → 245 → 257 → 245 → 251 → 245 (the 268 → 80
+step is a rejection recovering to the floor). **All twelve of those renders must be
+the placeholder**; the nine that follow, at a settled 245pt, are the lyric. A live
+check that counts clips is the only way to see this — no test can, because the
+probe sequence needs a real menu bar.
 
 `LyricText.attributed` takes plain values, not the model — that is what lets a
 test drive every state. Keep it that way: `StatusItemController.render` is the

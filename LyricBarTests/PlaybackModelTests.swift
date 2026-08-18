@@ -201,4 +201,79 @@ struct PlaybackModelTests {
         model.isPaused = false
         #expect(model.header == "Girl — The Beatles")
     }
+
+    @Test("Pausing cannot leave a stale lyric clipped into the collapsed box")
+    func pausingClearsTheLyric() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        spotify.positionValue = 25
+        model.refreshNow()
+        await model.awaitPendingLyrics()
+        model.refreshNow()
+        try? #require(model.lineText == "second")
+
+        model.isPaused = true
+
+        #expect(!model.displayState.holdsLyric)
+        #expect(model.lineText == "♪")
+        #expect(model.boxWidth < model.lyricBoxWidth)
+    }
+
+    @Test("Playback stopping cannot leave a stale lyric clipped into the collapsed box")
+    func stoppingClearsTheLyric() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        spotify.positionValue = 25
+        model.refreshNow()
+        await model.awaitPendingLyrics()
+        model.refreshNow()
+        try? #require(model.lineText == "second")
+
+        spotify.next = .unavailable
+        model.refreshNow()
+
+        #expect(model.displayState == .idle)
+        #expect(!model.displayState.holdsLyric)
+        #expect(model.lineText == "♪")
+        #expect(model.boxWidth < model.lyricBoxWidth)
+    }
+
+    @Test("A calibration probe never renders a lyric into the probe box")
+    func probingShowsThePlaceholder() {
+        let lyric = "Somewhere a long train is leaving the station"
+
+        #expect(PlaybackModel.displayText(chunk: lyric, probing: true, state: .playing) == "♪")
+        #expect(PlaybackModel.displayText(chunk: lyric, probing: false, state: .playing) == lyric)
+    }
+
+    @Test("A state that collapses the box never renders a lyric into it", arguments: [
+        PlaybackModel.DisplayState.noLyrics,
+        .paused,
+        .idle,
+    ])
+    func collapsedStatesShowThePlaceholder(state: PlaybackModel.DisplayState) {
+        #expect(!state.holdsLyric)
+        #expect(PlaybackModel.displayText(chunk: "a stale lyric", probing: false, state: state) == "♪")
+    }
+
+    @Test("A denial outranks a stale lyric")
+    func denialShowsItsOwnPlaceholder() {
+        #expect(PlaybackModel.displayText(chunk: "a stale lyric",
+                                          probing: false, state: .denied) == "⚠\u{FE0E}")
+    }
+
+    @Test("Lyric-holding states still show the lyric when not probing", arguments: [
+        PlaybackModel.DisplayState.playing,
+        .instrumental,
+        .loading,
+    ])
+    func lyricStatesShowTheLyric(state: PlaybackModel.DisplayState) {
+        #expect(state.holdsLyric)
+        #expect(PlaybackModel.displayText(chunk: "second", probing: false, state: state) == "second")
+        #expect(PlaybackModel.displayText(chunk: "", probing: false, state: state) == "♪")
+    }
 }
