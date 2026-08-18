@@ -161,7 +161,7 @@ struct NoTruncationTests {
             let expanded = LyricReflow.expand([LyricLine(time: 0, text: line)],
                                               trackDuration: 30, width: box)
             for (position, chunk) in expanded.enumerated() {
-                let size = LyricImage.fittedFontSize(for: chunk.text, boxWidth: box)
+                let size = LyricText.fittedFontSize(for: chunk.text, boxWidth: box)
                 let width = MenuBarMetrics.textWidth(chunk.text, fontSize: size)
 
                 #expect(width <= box,

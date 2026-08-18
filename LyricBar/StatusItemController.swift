@@ -42,6 +42,7 @@ final class StatusItemController: NSObject {
         let box = model.boxWidth
         let text = model.lineText
 
+        MenuBarFit.itemWindow = button.window
         statusItem.length = box
         button.attributedTitle = LyricText.attributed(text: text,
                                                       boxWidth: box,

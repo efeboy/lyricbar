@@ -75,10 +75,15 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
   cares where the widths come from.
 - **`NoTruncationTests`** — the opposite choice on purpose. Uses *real* menu bar
   metrics across five box widths to assert the end-to-end guarantee: every chunk
-  fits its box at the font size `LyricImage` picks, and no character is ever
+  fits its box at the font size `LyricText` picks, and no character is ever
   dropped. It asserts inequalities, not exact splits, so it does not drift.
-- **`MenuBarBoxTests`** — `LyricImage.render` returns one width across every
-  state, and an over-wide line shrinks into the box rather than widening it.
+- **`MenuBarBoxTests`** — what `LyricText` alone guarantees: the fitted font size
+  stays inside `[minimumFontSize, baseFontSize]` for every state and every content
+  shape, a line too wide to shrink bottoms out at the floor, the paragraph style is
+  centered and `.byClipping` (never ellipsized), and `DisplayState.opacity` reaches
+  the drawn colour. It does **not** assert that arbitrary text fits the box —
+  nothing promises that, and asserting it here fails on raw unreflowed lines. The
+  end-to-end fit guarantee is `NoTruncationTests`, on reflowed chunks.
 - **`MenuBarFitTests`** — the pure half of the fit calibration:
   `crowdsNeighbours`, `optimisticBound`, the cache round-trip, and signatures.
 - **`PlaybackModelTests`** — the tick logic, driven through injected fakes: track
@@ -143,12 +148,8 @@ Files under `LyricBar/`:
 - **`LoginItem.swift`** — thin `SMAppService.mainApp` wrapper for the login toggle.
 - **`PlaybackModel.swift`** — `@MainActor @Observable`; owns the poll loop, source
   selection, position extrapolation, the per-track fetch task, and the fit.
-- **`LyricText.swift`** — builds the centered `NSAttributedString` the status item
-  button displays, at the font size `LyricImage.fittedFontSize` picks.
-- **`LyricImage.swift`** — **legacy.** Only `fittedFontSize` is still live (called
-  by `LyricText` and the reflow tests); `render` is now unused by the app and is
-  kept solely because `MenuBarBoxTests` still asserts against it. Both go when
-  those tests are re-pointed at `LyricText`.
+- **`LyricText.swift`** — owns `fittedFontSize` and builds the centered
+  `NSAttributedString` the status item button displays.
 - **`StatusItemController.swift`** — owns the `NSStatusItem`, sets `length` and the
   button's `attributedTitle`, hosts the popover, and pushes model changes to the
   item via `withObservationTracking`.
@@ -290,8 +291,14 @@ So the app measures. The status item lives in an `NSStatusBarWindow` **in this
 process**, so its frame is readable:
 
 ```swift
-NSApp.windows.first { $0.className.contains("StatusBar") }?.frame
+statusItem.button?.window?.frame
 ```
+
+`StatusItemController.render` hands that window to `MenuBarFit.itemWindow` (a weak
+reference) on every render, and `itemFrame` reads it from there. It used to be
+found by scanning `NSApp.windows` for a `className` containing `"StatusBar"`, which
+worked but matched a private class name by string; owning the item made the window
+directly reachable.
 
 An earlier version of this file claimed the item's origin was unknowable. It is
 not — only its *ordering* among other apps' items is. The frame is the ground
@@ -367,9 +374,7 @@ optional:
   reading is the complaint this whole subsystem started from.
 
 We own the `NSStatusItem` now, but its *position among other apps' items* is still
-chosen by the system — don't write geometry that needs it. `MenuBarFit.itemFrame`
-also still locates the window by `className.contains("StatusBar")`; that works, but
-it is now reachable directly as `statusItem.button?.window` and should be switched.
+chosen by the system — don't write geometry that needs it.
 
 ### Verifying against the live item
 
@@ -434,15 +439,23 @@ handled by a cascade that has **no truncating branch at all**:
    fits the box at the base font, and give each chunk its own timestamp.
 2. **A tight window prefers shrinking to splitting.** If the line's time window
    cannot give each chunk `minChunkDuration` (1.5s), and the whole line *would*
-   fit at the minimum font size, the line is left whole and `LyricImage` shrinks
+   fit at the minimum font size, the line is left whole and `LyricText` shrinks
    it. Calmer than flashing chunks past.
 3. **Otherwise split anyway.** If it does not fit even shrunk, chunks that flash
    past are still better than words the user never sees.
 4. **A single word wider than the whole box is broken at grapheme boundaries**
    (`graphemePlan`). Rare (`Supercalifragilisticexpialidocious`) but real, and at
    the 80pt floor an 18-character word already qualifies.
-5. **`LyricImage.fittedFontSize` is the backstop**, shrinking from the base size
+5. **`LyricText.fittedFontSize` is the backstop**, shrinking from the base size
    toward `MenuBarMetrics.minimumFontSize` (9pt) until the string fits.
+
+**Step 5 stops at the floor whether or not the string fits** — it bounds the font
+size, it does not promise the text fits the box. What makes the guarantee hold is
+that steps 1–4 have already split the line into chunks that fit at the *base* font,
+so the backstop only ever has to absorb the tight-window case from step 2. Handed a
+raw unreflowed line it will happily bottom out at 9pt and still overflow, and the
+button's `.byClipping` then clips it. So assert end-to-end fit on **reflowed
+chunks** (`NoTruncationTests`), never on raw lines.
 
 Step 2 is exact rather than a fudge factor: `expand` takes a **`measureShrunk`**
 closure that measures at the minimum font size, so "would this fit if shrunk"
@@ -491,12 +504,6 @@ divide. Verify each dictionary with `sdef` rather than trusting the docs.
 or `rewinding`; `MusicBridge` collapses those to `playing` in-script so the shared
 `PlayerState` enum stays small. Use `persistent ID` for the track identity — it is
 stable across launches (Spotify uses `id`).
-
-**`NSImage(size:flipped:drawingHandler:)`'s block must be safe to call from any
-thread**, and is deferred — Apple's docs: "AppKit executes it on the same thread
-on which you draw the image itself, which can be any thread of your app." So
-`LyricImage` builds the `NSAttributedString` and picks the font size *outside* the
-handler and only calls `draw` inside it. Do not move measurement into the block.
 
 **A `Regex` is not `Sendable`,** so a regex literal cannot be a `static let` under
 Swift 6 (`static property 'timestamp' is not concurrency-safe`). `LRCParser.parse`
@@ -642,9 +649,6 @@ Not yet addressed, in rough priority order:
   known wrinkle where the dismissing click also fires the button action and
   immediately reopens it. If that shows up, the fix is `.applicationDefined` plus
   an `NSEvent` global monitor for outside clicks, not a timestamp guard.
-- **`LyricImage.render` is dead code kept alive by its tests.** Re-point
-  `MenuBarBoxTests` at `LyricText`/`statusItem.length` and delete both it and
-  `LyricImage.barHeight`; move `fittedFontSize` into `LyricText`.
 
 - **`position()` cannot report a denial.** `snapshot()` carries the distinction and
   is what drives the UI, so this is cosmetic — but the asymmetry is a trap if

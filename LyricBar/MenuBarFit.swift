@@ -15,12 +15,11 @@ enum MenuBarFit {
     private static let neighbourGrace = Duration.milliseconds(140)
     private static let defaultsPrefix = "fittedBox."
 
+    static weak var itemWindow: NSWindow?
+
     static var itemFrame: CGRect? {
-        guard let window = NSApp.windows.first(where: { $0.className.contains("StatusBar") }) else {
-            return nil
-        }
-        let frame = window.frame
-        guard frame.minX > 0, frame.minY > 0, frame.width > 0 else { return nil }
+        guard let frame = itemWindow?.frame,
+              frame.minX > 0, frame.minY > 0, frame.width > 0 else { return nil }
         return frame
     }
 

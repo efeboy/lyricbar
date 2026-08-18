@@ -9,10 +9,10 @@ struct MenuBarBoxTests {
 
     private static let box: CGFloat = 280
 
-    private func renderedWidth(_ text: String,
-                               opacity: Double = 1.0,
-                               box: CGFloat = MenuBarBoxTests.box) -> CGFloat {
-        LyricImage.render(text: text, boxWidth: box, alpha: opacity).size.width
+    private func drawnWidth(_ text: String,
+                            opacity: Double = 1.0,
+                            box: CGFloat = MenuBarBoxTests.box) -> CGFloat {
+        LyricText.attributed(text: text, boxWidth: box, alpha: opacity).size().width
     }
 
     private static let states: [(name: String, text: String, state: PlaybackModel.DisplayState)] = [
@@ -25,12 +25,13 @@ struct MenuBarBoxTests {
         ("empty/guard",   "", .idle),
     ]
 
-    @Test("Neither the lyric nor the state's opacity can change the width")
-    func constantAcrossStates() {
-        let widths = Self.states.map { renderedWidth($0.text, opacity: $0.state.opacity) }
+    @Test("Every state's lyric is drawn at a legible size")
+    func everyStateStaysLegible() {
+        let sizes = Self.states.map { LyricText.fittedFontSize(for: $0.text, boxWidth: Self.box) }
+        let illegible = zip(Self.states.map(\.name), sizes)
+            .filter { $1 < MenuBarMetrics.minimumFontSize || $1 > MenuBarMetrics.baseFontSize }
 
-        #expect(Set(widths).count == 1,
-                "states differed: \(zip(Self.states.map(\.name), widths).map { "\($0)=\($1)" })")
+        #expect(illegible.isEmpty, "outside the size range: \(illegible.map { "\($0)=\($1)" })")
     }
 
     @Test("A lyric holds the box open; having none does not", arguments: [
@@ -50,7 +51,8 @@ struct MenuBarBoxTests {
 
         #expect(placeholder >= MenuBarMetrics.minimumPlaceholderWidth)
         #expect(placeholder < MenuBarMetrics.minimumBoxWidth)
-        #expect(renderedWidth("♪", box: placeholder) == placeholder)
+        #expect(drawnWidth("♪", box: placeholder) <= placeholder)
+
     }
 
     @Test("An instrumental gap keeps the full box, so a song cannot make it flicker")
@@ -59,49 +61,66 @@ struct MenuBarBoxTests {
         #expect(PlaybackModel.DisplayState.playing.holdsLyric)
     }
 
-    @Test("An empty lyric occupies the full box")
-    func emptyStillFillsBox() {
-        #expect(renderedWidth("") == renderedWidth("Girl"))
+    @Test("The lyric is centered, and clipped rather than ellipsized")
+    func centeredAndNeverEllipsized() throws {
+        let drawn = LyricText.attributed(text: "Girl", boxWidth: Self.box, alpha: 1)
+        let paragraph = try #require(
+            drawn.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+
+        #expect(paragraph.alignment == .center)
+        #expect(paragraph.lineBreakMode == .byClipping)
     }
 
-    @Test("An over-wide line cannot widen the box")
-    func overflowCannotGrowBox() {
+    @Test("A line far too wide to shrink into the box bottoms out at the floor")
+    func overflowBottomsOutAtTheFloor() {
         let huge = String(repeating: "Wonderwall ", count: 40)
 
-        #expect(renderedWidth(huge) == Self.box)
+        #expect(LyricText.fittedFontSize(for: huge, boxWidth: Self.box)
+                == MenuBarMetrics.minimumFontSize)
     }
 
-    @Test("Width is independent of the lyric", arguments: [
+    @Test("No content shape escapes the size range", arguments: [
         "Was the sky so grey at dawn",
         "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
         "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii",
         "♪",
         "",
     ])
-    func widthIgnoresContent(text: String) {
-        #expect(renderedWidth(text) == Self.box)
+    func contentStaysWithinTheSizeRange(text: String) {
+        let size = LyricText.fittedFontSize(for: text, boxWidth: Self.box)
+
+        #expect(size >= MenuBarMetrics.minimumFontSize)
+        #expect(size <= MenuBarMetrics.baseFontSize)
     }
 
-    @Test("The rendered image is exactly one menu bar tall")
-    func imageMatchesBarHeight() {
-        let image = LyricImage.render(text: "Girl", boxWidth: Self.box, alpha: 1)
+    @Test("A dimmed state reaches the drawn text as a dimmed colour")
+    func opacityReachesTheText() throws {
+        func alpha(_ opacity: Double) throws -> CGFloat {
+            let drawn = LyricText.attributed(text: "Girl", boxWidth: Self.box, alpha: opacity)
+            let colour = try #require(
+                drawn.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+            return colour.alphaComponent
+        }
 
-        #expect(image.size.height == NSStatusBar.system.thickness)
-        #expect(image.isTemplate)
+        let idle = try alpha(PlaybackModel.DisplayState.idle.opacity)
+        let playing = try alpha(PlaybackModel.DisplayState.playing.opacity)
+
+        #expect(idle < playing)
+        #expect(playing == 1.0)
     }
 
     @Test("A line that fits keeps the full menu bar font size")
     func shortLineKeepsBaseFont() {
-        #expect(LyricImage.fittedFontSize(for: "Girl", boxWidth: Self.box)
+        #expect(LyricText.fittedFontSize(for: "Girl", boxWidth: Self.box)
                 == MenuBarMetrics.baseFontSize)
-        #expect(LyricImage.fittedFontSize(for: "", boxWidth: Self.box)
+        #expect(LyricText.fittedFontSize(for: "", boxWidth: Self.box)
                 == MenuBarMetrics.baseFontSize)
     }
 
     @Test("An over-wide line shrinks rather than overflowing", arguments: [80.0, 120.0, 250.0])
     func shrinksToFit(box: CGFloat) {
         let line = "Was the sky so grey at dawn that the rain would find its way?"
-        let size = LyricImage.fittedFontSize(for: line, boxWidth: box)
+        let size = LyricText.fittedFontSize(for: line, boxWidth: box)
 
         #expect(size < MenuBarMetrics.baseFontSize)
         #expect(size >= MenuBarMetrics.minimumFontSize)
