@@ -64,8 +64,6 @@ final class StatusItemController: NSObject {
         button.setAccessibilityLabel(text)
         shownText = text
 
-        let fs = LyricText.fittedFontSize(for: text, boxWidth: box)
-        let w = MenuBarMetrics.textWidth(text, fontSize: fs)
         fade(button, to: model.displayState.opacity)
     }
 
