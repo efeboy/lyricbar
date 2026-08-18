@@ -466,6 +466,14 @@ Swift 6 (`static property 'timestamp' is not concurrency-safe`). `LRCParser.pars
 binds it as a local constant instead — still compile-time checked, which is the
 whole reason it is a literal rather than `try! NSRegularExpression`.
 
+**`SMAppService.Status` has two "off" states, not one.** An app that has never
+been registered reports `.notFound`; one that was registered and then
+unregistered reports `.notRegistered`. Both mean "not a login item", which is why
+`LoginItem.isEnabled` tests `== .enabled` — a `!= .notRegistered` test looks
+equivalent and would report a fresh install as already enabled. Observed on the
+live service from `/Applications`: `.notFound` → `register()` → `.enabled` →
+`unregister()` → `.notRegistered`.
+
 **`@Observable` and stored-property initializers.** `Self.someStatic` in a stored
 property's initializer fails with "covariant 'Self' type cannot be referenced from
 a stored property initializer" — spell the type out (`PlaybackModel.idleTitle`).
@@ -605,4 +613,9 @@ Not yet addressed, in rough priority order:
   `xcodebuild -derivedDataPath build` walks straight past — its output lands in
   `build/Build/Products/Release/` and would have been treated as a real install.
   `LoginItemTests` pins both shapes. A copy in `/Applications` works normally,
-  which is the only way to exercise the toggle at all.
+  which is the only way to exercise the toggle at all — verified there
+  end-to-end: `isSupported` is true, `register()` moves the service to
+  `.enabled`, and `unregister()` takes it back off, while the same binary run
+  from `Build/Products/Release/` reports `isSupported` false and never reaches
+  `register()`. No test can cover that; it needs an installed bundle and an
+  env-gated stderr probe, deleted afterwards like the menu bar scaffolds.
