@@ -863,9 +863,16 @@ rather than `.unavailable`, so the bridges resolve to `BridgeSnapshot.denied`.
 `probeSources` reports a denial **only when nothing else is playing**: one
 refused app must not mask the other working. The item then shows `⚠︎` at full
 opacity instead of the dimmed `♪`, the popover reads "Automation access denied /
-Privacy & Security → Automation", and the pull-down has an **Open Automation
+Privacy & Security → Automation", and the pull-down grows an **Open Automation
 Settings…** item that deep-links to
 `x-apple.systempreferences:com.apple.preference.security?Privacy_Automation`.
+
+**That item is gated on `displayState == .denied`** and is absent otherwise. It
+is a recovery action for a state most users never reach, so leaving it in the
+menu permanently costs every user a row to explain a problem they do not have —
+and it appears exactly where the popover has just named the problem. Gate it on
+`displayState`, which is observable, and not on `automationDenied`, which is
+`@ObservationIgnored` and would not re-render the menu.
 
 `snapshot()` returns `BridgeSnapshot`, not `NowPlaying?`, precisely so this
 distinction cannot be dropped again — an optional had nowhere to put "denied".

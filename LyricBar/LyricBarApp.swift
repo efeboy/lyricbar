@@ -93,8 +93,6 @@ private struct OptionsMenu: View {
             }
             .keyboardShortcut("p")
 
-            Divider()
-
             Toggle("Open at Login", isOn: $model.loginEnabled)
                 .onAppear { model.refreshLoginState() }
                 .disabled(!model.loginSupported)
@@ -105,11 +103,13 @@ private struct OptionsMenu: View {
                 }
             }
 
-            Divider()
-
-            Button("Open Automation Settings…") {
-                model.openAutomationSettings()
+            if model.displayState == .denied {
+                Button("Open Automation Settings…") {
+                    model.openAutomationSettings()
+                }
             }
+
+            Divider()
 
             Button("Quit LyricBar") {
                 NSApplication.shared.terminate(nil)
