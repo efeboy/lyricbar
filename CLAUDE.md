@@ -98,7 +98,7 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 - **`MenuBarFitTests`** — the pure half of the fit calibration:
   `crowdsNeighbours`, `optimisticBound`, the cache round-trip, and signatures.
 - **`PlaybackModelTests`** — the tick logic, driven through injected fakes: track
-  changes, the loading window, instrumental intros, pause/resume, Spotify winning
+  changes, the loading window, instrumental intros, hide/show, Spotify winning
   ties, and Automation denial. `refreshNow()` forces a full metadata probe and
   `awaitPendingLyrics()` waits on the per-track fetch, so every case is
   deterministic without a clock or the network.
@@ -769,6 +769,13 @@ Settings and Quit still live in an ellipsis `Menu` inside the popover header.
 Now that the item is hand-rolled, a **real right-click menu is finally reachable**
 (`statusItem.menu`, or distinguishing the button's mouse event) — it is simply not
 wired up yet.
+
+**The pull-down's first item is "Hide Lyrics", not "Pause Lyrics".** It sits
+directly under a header showing the track and artist, where "Pause" reads as
+*pause the music* — a thing this app deliberately cannot do. The model property
+is `isHidden` and the header it sets is "Lyrics hidden" for the same reason;
+`DisplayState.paused` still means the player is paused, and the hidden state
+borrows it because both are "no lyric to show".
 
 **The popover shows the song and its lyrics, nothing else.** No transport, no
 seek, no progress — this is a lyrics-only tool and the bridges are read-only by

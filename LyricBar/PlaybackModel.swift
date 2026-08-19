@@ -46,12 +46,12 @@ final class PlaybackModel {
         }
     }
 
-    var isPaused: Bool {
-        get { paused }
+    var isHidden: Bool {
+        get { hidden }
         set {
-            guard newValue != paused else { return }
-            paused = newValue
-            newValue ? enterPause() : leavePause()
+            guard newValue != hidden else { return }
+            hidden = newValue
+            newValue ? enterHidden() : leaveHidden()
         }
     }
 
@@ -86,7 +86,7 @@ final class PlaybackModel {
 
     private var chunk = ""
     private var storedWidth: LyricWidth
-    private var paused = false
+    private var hidden = false
     private var loginRegistered = LoginItem.isEnabled
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -125,7 +125,7 @@ final class PlaybackModel {
         MenuBarMetrics.placeholderBoxWidth(for: deniedPlaceholder))
     private static let startingHeader = "Starting…"
     private static let idleTitle = "Nothing playing"
-    private static let pausedHeader = "Paused"
+    private static let hiddenHeader = "Lyrics hidden"
     private static let loadingHeader = "Loading lyrics…"
     private static let noLyricsHeader = "No synced lyrics found"
     private static let deniedTitle = "Automation access denied"
@@ -368,7 +368,7 @@ final class PlaybackModel {
     }
 
     private func tick() {
-        guard !paused else { return }
+        guard !hidden else { return }
         let now = clock.now
         let probeMetadata = lastMetadataProbe
             .map { $0.duration(to: now).seconds >= Self.metadataInterval } ?? true
@@ -522,13 +522,13 @@ final class PlaybackModel {
         nextLine = ""
     }
 
-    private func enterPause() {
+    private func enterHidden() {
         chunk = ""
-        header = Self.pausedHeader
+        header = Self.hiddenHeader
         displayState = .paused
     }
 
-    private func leavePause() {
+    private func leaveHidden() {
         shownMenuIndex = -1
         shownLyricIndex = -2
         positionSample = nil
@@ -561,14 +561,14 @@ final class PlaybackModel {
                     self.lines = parsed
                     self.rebuildMenuLines()
                     self.shownLyricIndex = -2
-                    if !self.paused { self.header = "\(title) — \(artist)" }
+                    if !self.hidden { self.header = "\(title) — \(artist)" }
                     return
                 case .unavailable:
                     self.fetching = false
                     self.lines = []
                     self.menuLines = []
                     self.shownMenuIndex = -1
-                    if !self.paused {
+                    if !self.hidden {
                         self.chunk = ""
                         self.header = Self.noLyricsHeader
                         self.displayState = .noLyrics

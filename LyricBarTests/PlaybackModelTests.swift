@@ -181,8 +181,8 @@ struct PlaybackModelTests {
         #expect(model.boxWidth < model.lyricBoxWidth)
     }
 
-    @Test("Pausing lyric updates freezes the item and restores the header on resume")
-    func pauseAndResume() async {
+    @Test("Hiding lyrics freezes the item and restores the header when shown again")
+    func hideAndShow() async {
         let spotify = FakeBridge(source: .spotify)
         spotify.next = track("s1")
         let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
@@ -190,20 +190,20 @@ struct PlaybackModelTests {
         model.refreshNow()
         await model.awaitPendingLyrics()
 
-        model.isPaused = true
+        model.isHidden = true
         #expect(model.displayState == .paused)
-        #expect(model.header == "Paused")
+        #expect(model.header == "Lyrics hidden")
 
         spotify.positionValue = 25
         model.refreshNow()
         #expect(model.displayState == .paused)
 
-        model.isPaused = false
+        model.isHidden = false
         #expect(model.header == "Girl — The Beatles")
     }
 
-    @Test("Pausing cannot leave a stale lyric clipped into the collapsed box")
-    func pausingClearsTheLyric() async {
+    @Test("Hiding cannot leave a stale lyric clipped into the collapsed box")
+    func hidingClearsTheLyric() async {
         let spotify = FakeBridge(source: .spotify)
         spotify.next = track("s1")
         let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
@@ -214,7 +214,7 @@ struct PlaybackModelTests {
         model.refreshNow()
         try? #require(model.lineText == "second")
 
-        model.isPaused = true
+        model.isHidden = true
 
         #expect(!model.displayState.holdsLyric)
         #expect(model.lineText == "♪")

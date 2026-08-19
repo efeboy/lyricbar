@@ -88,8 +88,8 @@ private struct OptionsMenu: View {
 
     var body: some View {
         Menu {
-            Button(model.isPaused ? "Resume Lyrics" : "Pause Lyrics") {
-                model.isPaused.toggle()
+            Button(model.isHidden ? "Show Lyrics" : "Hide Lyrics") {
+                model.isHidden.toggle()
             }
             .keyboardShortcut("p")
 
