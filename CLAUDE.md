@@ -73,7 +73,7 @@ Login Items.
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-81 tests in 9 Swift Testing suites:
+80 tests in 9 Swift Testing suites:
 
 - **`LRCParserTests`** — the LRC grammar (fraction separators and digit counts,
   repeated chorus timestamps, CRLF payloads) and `index(at:)` boundaries.
@@ -93,7 +93,9 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
   shape, a line too wide to shrink bottoms out at the floor, the paragraph style is
   centered and `.byClipping` (never ellipsized), the drawn colour is a
   full-strength `labelColor` (opacity lives on the view, not the text), and the
-  dimmed states rank below `.playing`. It does **not** assert that arbitrary text fits the box —
+  dimmed states rank below `.playing`. `holdsLyric` is asserted here as a
+  *content* question — which states may render a lyric — not a width one; the box
+  is the same in every state. It does **not** assert that arbitrary text fits the box —
   nothing promises that, and asserting it here fails on raw unreflowed lines. The
   end-to-end fit guarantee is `NoTruncationTests`, on reflowed chunks.
 - **`MenuBarFitTests`** — the pure half of the fit calibration:
@@ -190,48 +192,49 @@ position leap. Timing that measures *elapsed* time must be monotonic.
 
 ## The menu bar item
 
-### It is ONE FIXED BOX *while there is a lyric* — and collapses when there isn't
+### It is ONE FIXED BOX, in every state
 
 ```
-playing / instrumental gap:
+every state:
 ┌──────────────────── lyricBoxWidth ───────────────┐
-│              ──── centered lyric ────            │
+│              ──── centered lyric ────            │   playing
+│                       ♪                          │   instrumental / loading /
+│                                                  │   noLyrics / paused / idle
+│                       ⚠︎                          │   denied
 └──────────────────────────────────────────────────┘
-
-idle / no lyrics found / paused:
-┌── 32pt ──┐
-│    ♪     │
-└──────────┘
         item on screen = boxWidth + 16pt system padding
 ```
 
-Centering is what stops the *apparent* movement once the width is genuinely
-fixed: left-aligned text starts at the same edge every line and ends somewhere
-new, so the block still reads as shifting. Centered, all lines share a midpoint.
-The states are told apart by `DisplayState.opacity`, applied to the button's
-`alphaValue` — see the animation section below for why it lives there and not in
-the text's colour.
+`boxWidth` is `probeWidth ?? lyricBoxWidth` — one number, no branch on state.
+**Nothing about the item's geometry depends on `DisplayState` any more**, so the
+item cannot move except when the fit itself is recalibrated or the user picks a
+different band. That is the strongest form of the guarantee this whole subsystem
+exists for, and it is the shape the design kit specifies: all fourteen variants
+of `LyricBar / Menu Bar Item` are the same width.
 
-**The collapse is not a weakening of the fixed box — read `DisplayState.holdsLyric`
-before touching it.** The box exists to stop *line-to-line* jitter, and it still
-does: it never changes while lyrics are playing. But holding 200-odd points open
-around a 30%-opacity `♪` does not read as "nothing playing", it reads as broken
-empty menu bar — that is exactly what prompted a bug report of "it vanished from
-the taskbar". So the width switches on *state transitions*, of which there are a
-handful per track, never per line.
+Centering is what stops the *apparent* movement: left-aligned text starts at the
+same edge every line and ends somewhere new, so the block still reads as
+shifting. Centered, all lines share a midpoint. The states are told apart purely
+by `DisplayState.opacity`, applied to the button's `alphaValue` — see the
+animation section for why it lives there and not in the text's colour.
 
-`.instrumental` deliberately **keeps** the full box. Intros, outros and
-bare-timestamp gaps happen mid-song, so collapsing on them would flicker the item
-during playback, which is the very thing the fixed box exists to prevent.
-`.loading` holds it for the same reason: it sits between a track change and the
-fetch landing, and most tracks do have lyrics, so holding avoids a width change at
-the exact moment the first line appears. `.idle`, `.noLyrics`, `.paused` and
-`.denied` collapse — all of which last for a track or longer. If you add a
-`DisplayState` case, decide which side of that line it is on.
+**This replaced a collapsing box, and the history is worth knowing before you
+reintroduce one.** The item used to shrink to a 32pt placeholder in `.idle`,
+`.noLyrics`, `.paused` and `.denied`, because a wide box holding a 30%-opacity
+`♪` had drawn a bug report of "it vanished from the taskbar". That report was
+against a **556pt** box — the width the old hard-coded `otherItemsReserve: 200`
+produced, which was wrong by ~300pt. Once `MenuBarFit` started measuring the real
+bar the box became ~247pt on the reference display, and a centred glyph in it
+reads as idle rather than broken. The collapse was a fix for a bug whose actual
+cause was fixed elsewhere.
 
-The placeholder width comes from `MenuBarMetrics.placeholderBoxWidth(for:)`, with
-a `minimumPlaceholderWidth` floor so the item stays comfortably clickable — the
-menu is only reachable through it.
+So if the empty states ever look wrong again, **check the fit before reaching for
+a collapse**: an item that looks vacant is far more likely to be a calibration
+that ran wide than a box that needs to shrink.
+
+`DisplayState.holdsLyric` still exists and is still load-bearing — but it now
+governs **content only**, never width. It answers "may this state render a lyric",
+which `displayText` uses to fall back to `♪`. Do not reattach it to geometry.
 
 ### The width is SET directly, and the lyric is real text
 
@@ -331,7 +334,9 @@ regardless of the string, and a permanent glyph beside text the user is reading 
 with it. What replaces it is an invariant one level up: `PlaybackModel.lineText`
 is a computed property that **can never be empty** — every "nothing to read" case
 falls back to `♪`, so the box always has something visible and the menu is
-always reachable. Keep that guarantee where it is; scattering placeholder
+always reachable. That guarantee matters more now that the box no longer
+collapses: an empty string in a 247pt box would be an invisible, unclickable
+item. Keep it where it is; scattering placeholder
 assignments across the tick branches is what it replaced.
 
 That decision is `PlaybackModel.displayText(chunk:probing:state:)`, a **static
@@ -340,8 +345,8 @@ function over plain values** so tests can drive every combination — the same r
 all three hold: not probing, the state `holdsLyric`, and the chunk is non-empty.
 
 **The `probing:` argument is not politeness, it is a shipped bug.** `boxWidth` is
-`probeWidth ?? (holdsLyric ? lyricBoxWidth : placeholderWidth)`, so a calibration
-probe *overrides* the box down to as little as the 80pt floor — while `menuLines`
+`probeWidth ?? lyricBoxWidth`, so a calibration probe *overrides* the box down to
+as little as the 80pt floor — while `menuLines`
 is still reflowed for the old budget, because `applyFittedWidth()` only rebuilds it
 *after* calibration finishes. Render a lyric in that window and `fittedFontSize`
 bottoms out at 9pt, the text still overflows, and `.byClipping` clips it mid-word.
@@ -653,8 +658,8 @@ one-off. Both tests iterate `LyricWidth.allCases`, so neither pins the count.
 `lyricBoxWidth` is also the reflow budget — with no icon slot the box and the text
 area are one span, so there is deliberately only one number. Note that
 `rebuildMenuLines` must use `lyricBoxWidth` and never `boxWidth`: the latter is
-the placeholder width in the non-lyric states, and reflowing a track to 32pt
-would shred it.
+whatever a calibration probe is currently driving, and reflowing a track to the
+80pt probe floor would shred it.
 
 **Resolve geometry against `MenuBarMetrics.menuBarScreen`, never `NSScreen.main`.**
 Apple's docs define `main` as "the screen object containing the window with the

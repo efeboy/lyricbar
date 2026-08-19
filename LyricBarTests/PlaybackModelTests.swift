@@ -50,7 +50,7 @@ struct PlaybackModelTests {
         LyricLine(time: 30, text: "third"),
     ]
 
-    @Test("Nothing playing reads as idle, and the box collapses")
+    @Test("Nothing playing reads as idle, and the box does not move")
     func idleWhenNothingPlays() {
         let model = makeModel(bridges: [FakeBridge(source: .spotify)])
 
@@ -58,7 +58,7 @@ struct PlaybackModelTests {
 
         #expect(model.displayState == .idle)
         #expect(model.lineText == "♪")
-        #expect(model.boxWidth < model.lyricBoxWidth)
+        #expect(model.boxWidth == model.lyricBoxWidth)
     }
 
     @Test("A refused Automation prompt is reported, not silently ignored")
@@ -117,7 +117,7 @@ struct PlaybackModelTests {
 
         #expect(model.displayState == .noLyrics)
         #expect(model.header == "No synced lyrics found")
-        #expect(model.boxWidth < model.lyricBoxWidth)
+        #expect(model.boxWidth == model.lyricBoxWidth)
     }
 
     @Test("Once lyrics land, the line at the playhead is what shows")
@@ -178,7 +178,7 @@ struct PlaybackModelTests {
 
         #expect(model.displayState == .paused)
         #expect(model.trackTitle == "Girl")
-        #expect(model.boxWidth < model.lyricBoxWidth)
+        #expect(model.boxWidth == model.lyricBoxWidth)
     }
 
     @Test("Hiding lyrics freezes the item and restores the header when shown again")
@@ -202,7 +202,7 @@ struct PlaybackModelTests {
         #expect(model.header == "Girl — The Beatles")
     }
 
-    @Test("Hiding cannot leave a stale lyric clipped into the collapsed box")
+    @Test("Hiding clears the lyric rather than leaving a stale one on screen")
     func hidingClearsTheLyric() async {
         let spotify = FakeBridge(source: .spotify)
         spotify.next = track("s1")
@@ -218,10 +218,10 @@ struct PlaybackModelTests {
 
         #expect(!model.displayState.holdsLyric)
         #expect(model.lineText == "♪")
-        #expect(model.boxWidth < model.lyricBoxWidth)
+        #expect(model.boxWidth == model.lyricBoxWidth)
     }
 
-    @Test("Playback stopping cannot leave a stale lyric clipped into the collapsed box")
+    @Test("Playback stopping clears the lyric rather than leaving a stale one on screen")
     func stoppingClearsTheLyric() async {
         let spotify = FakeBridge(source: .spotify)
         spotify.next = track("s1")
@@ -239,7 +239,7 @@ struct PlaybackModelTests {
         #expect(model.displayState == .idle)
         #expect(!model.displayState.holdsLyric)
         #expect(model.lineText == "♪")
-        #expect(model.boxWidth < model.lyricBoxWidth)
+        #expect(model.boxWidth == model.lyricBoxWidth)
     }
 
     @Test("A calibration probe never renders a lyric into the probe box")
@@ -250,7 +250,7 @@ struct PlaybackModelTests {
         #expect(PlaybackModel.displayText(chunk: lyric, probing: false, state: .playing) == lyric)
     }
 
-    @Test("A state that collapses the box never renders a lyric into it", arguments: [
+    @Test("A state with nothing to say never renders a lyric", arguments: [
         PlaybackModel.DisplayState.noLyrics,
         .paused,
         .idle,

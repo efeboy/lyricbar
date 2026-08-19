@@ -40,22 +40,12 @@ struct MenuBarBoxTests {
         (.paused, false),
         (.idle, false),
     ])
-    func onlyLyricStatesHoldTheBox(state: PlaybackModel.DisplayState, holds: Bool) {
+    func onlyLyricStatesRenderALyric(state: PlaybackModel.DisplayState, holds: Bool) {
         #expect(state.holdsLyric == holds)
     }
 
-    @Test("The placeholder box stays comfortably clickable but far narrower")
-    func placeholderCollapses() {
-        let placeholder = MenuBarMetrics.placeholderBoxWidth(for: "♪")
-
-        #expect(placeholder >= MenuBarMetrics.minimumPlaceholderWidth)
-        #expect(placeholder < MenuBarMetrics.minimumBoxWidth)
-        #expect(drawnWidth("♪", box: placeholder) <= placeholder)
-
-    }
-
-    @Test("An instrumental gap keeps the full box, so a song cannot make it flicker")
-    func instrumentalDoesNotCollapse() {
+    @Test("An instrumental gap still counts as a lyric state")
+    func instrumentalRendersAsALyricState() {
         #expect(PlaybackModel.DisplayState.instrumental.holdsLyric)
         #expect(PlaybackModel.DisplayState.playing.holdsLyric)
     }

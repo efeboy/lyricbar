@@ -47,13 +47,6 @@ enum MenuBarMetrics {
     static func boxWidth(_ preference: LyricWidth, fittedWidth: CGFloat) -> CGFloat {
         max(minimumBoxWidth, min(fittedWidth, (preference.shareOfFit * fittedWidth).rounded()))
     }
-
-    static let placeholderSidePadding: CGFloat = 10
-    static let minimumPlaceholderWidth: CGFloat = 32
-
-    static func placeholderBoxWidth(for glyph: String) -> CGFloat {
-        max(minimumPlaceholderWidth, (textWidth(glyph) + placeholderSidePadding * 2).rounded())
-    }
 }
 
 enum LyricWidth: String, CaseIterable, Sendable {

@@ -29,7 +29,7 @@ final class PlaybackModel {
     private(set) var nextLine = ""
 
     var boxWidth: CGFloat {
-        probeWidth ?? (displayState.holdsLyric ? lyricBoxWidth : Self.placeholderWidth)
+        probeWidth ?? lyricBoxWidth
     }
 
     private(set) var lyricBoxWidth: CGFloat
@@ -120,9 +120,6 @@ final class PlaybackModel {
 
     private static let gapPlaceholder = "♪"
     private static let deniedPlaceholder = "⚠\u{FE0E}"
-    private static let placeholderWidth = max(
-        MenuBarMetrics.placeholderBoxWidth(for: gapPlaceholder),
-        MenuBarMetrics.placeholderBoxWidth(for: deniedPlaceholder))
     private static let startingHeader = "Starting…"
     private static let idleTitle = "Nothing playing"
     private static let hiddenHeader = "Lyrics hidden"
