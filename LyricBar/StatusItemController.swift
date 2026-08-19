@@ -1,7 +1,6 @@
 import AppKit
 import Observation
 import QuartzCore
-import SwiftUI
 
 @MainActor
 final class StatusItemController: NSObject {
@@ -12,7 +11,7 @@ final class StatusItemController: NSObject {
 
     private let model: PlaybackModel
     private let statusItem: NSStatusItem
-    private let popover = NSPopover()
+    private let menu = NSMenu()
 
     private var shownText: String?
     private var shownOpacity: Double?
@@ -22,28 +21,17 @@ final class StatusItemController: NSObject {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
-        popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: LyricPopover(model: model))
+        menu.delegate = self
+        menu.autoenablesItems = false
+        statusItem.menu = menu
 
         if let button = statusItem.button {
             button.wantsLayer = true
             button.imagePosition = .noImage
-            button.target = self
-            button.action = #selector(togglePopover)
         }
 
         render()
         observe()
-    }
-
-    @objc private func togglePopover() {
-        guard let button = statusItem.button else { return }
-        if popover.isShown {
-            popover.performClose(nil)
-            return
-        }
-        NSApp.activate()
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
     private func render() {
@@ -133,5 +121,80 @@ final class StatusItemController: NSObject {
                 self.observe()
             }
         }
+    }
+}
+
+extension StatusItemController: NSMenuDelegate {
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        model.refreshLoginState()
+        menu.removeAllItems()
+
+        let status = NSMenuItem(title: model.header, action: nil, keyEquivalent: "")
+        status.isEnabled = false
+        menu.addItem(status)
+        menu.addItem(.separator())
+
+        let hide = NSMenuItem(title: model.isHidden ? "Show Lyrics" : "Hide Lyrics",
+                              action: #selector(toggleHidden), keyEquivalent: "p")
+        hide.target = self
+        menu.addItem(hide)
+
+        let login = NSMenuItem(title: "Open at Login",
+                               action: #selector(toggleLogin), keyEquivalent: "")
+        login.target = self
+        login.state = model.loginEnabled ? .on : .off
+        login.isEnabled = model.loginSupported
+        menu.addItem(login)
+
+        menu.addItem(widthItem())
+
+        if model.displayState == .denied {
+            let automation = NSMenuItem(title: "Open Automation Settings…",
+                                        action: #selector(openAutomation), keyEquivalent: "")
+            automation.target = self
+            menu.addItem(automation)
+        }
+
+        menu.addItem(.separator())
+
+        let quit = NSMenuItem(title: "Quit LyricBar",
+                              action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.target = NSApp
+        menu.addItem(quit)
+    }
+
+    private func widthItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Width", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+        for band in LyricWidth.allCases {
+            let row = NSMenuItem(title: band.title,
+                                 action: #selector(selectWidth(_:)), keyEquivalent: "")
+            row.target = self
+            row.representedObject = band.rawValue
+            row.state = model.widthPreference == band ? .on : .off
+            submenu.addItem(row)
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    @objc private func toggleHidden() {
+        model.isHidden.toggle()
+    }
+
+    @objc private func toggleLogin() {
+        model.loginEnabled.toggle()
+    }
+
+    @objc private func selectWidth(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let band = LyricWidth(rawValue: raw) else { return }
+        model.widthPreference = band
+    }
+
+    @objc private func openAutomation() {
+        model.openAutomationSettings()
     }
 }

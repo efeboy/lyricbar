@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LyricBar is a macOS menu bar app that shows time-synced lyrics for whatever
 **Spotify or Apple Music** is currently playing. The menu bar item is a
-hand-rolled `NSStatusItem` owned by `StatusItemController`; the popover is a
-SwiftUI view hosted in an `NSPopover`. No third-party dependencies. Sources live
+hand-rolled `NSStatusItem` owned by `StatusItemController`; clicking it opens a
+native `NSMenu` carrying the status line and the settings. No third-party
+dependencies. Sources live
 under `LyricBar/`; the app is built from `LyricBar.xcodeproj`, a standard Xcode
 **macOS App target** (not SwiftPM — an app bundle is required for a status item
 and `SMAppService`).
@@ -62,7 +63,7 @@ don't "clean them up":
   defaults. Either one would pull `LRCLibClient` onto the main actor and run its
   JSON decoding there, quietly undoing the off-main-actor design below.
 
-"Open at login" is a toggle in the popover's options pull-down, backed by
+"Open at login" is a toggle in the status item's menu, backed by
 `SMAppService.mainApp`; the system tracks it under System Settings → General →
 Login Items.
 
@@ -124,14 +125,14 @@ Task.sleep(tick) → probeSources(): Spotify | Music (AppleScript) → track cha
                                               → LRCLibClient.fetch (async, per track)
                                               → LRCParser.parse → [LyricLine] ──┐
                                                                                 │
-        lines      ──→ popover triplet (previous / current / next) ←─────────────┤
+        lines      ──→ previous / current / next triplet (unrendered) ←──────────┤
         menuLines  ──→ LyricReflow.expand(width:) ──→ menu bar item ←────────────┘
 
         player position ──→ LRCParser.index(at:) → lineText / currentLine
 ```
 
 The parsed lines are kept twice on purpose. `lines` is the original timing and is
-what the popover shows; `menuLines` is the same track re-split to whatever fits
+the triplet's source; `menuLines` is the same track re-split to whatever fits
 the current menu bar width. Both are plain `[LyricLine]`, so `index(at:)` searches
 them identically — the reflow adds timestamps, it does not introduce a second
 lookup path. Changing the width preference or the screen layout rebuilds only
@@ -164,11 +165,13 @@ Files under `LyricBar/`:
 - **`LyricText.swift`** — owns `fittedFontSize` and builds the centered
   `NSAttributedString` the status item button displays.
 - **`StatusItemController.swift`** — owns the `NSStatusItem`, sets `length` and the
-  button's `attributedTitle`, hosts the popover, and pushes model changes to the
-  item via `withObservationTracking`.
+  button's `attributedTitle`, builds the menu on demand as its own
+  `NSMenuDelegate`, and pushes model changes to the item via
+  `withObservationTracking`.
 - **`LyricBarApp.swift`** — the `App` entry point: a `Settings` scene to satisfy
   SwiftUI's need for one, an `NSApplicationDelegateAdaptor` that creates the
-  controller, and the popover and options pull-down views.
+  controller. It holds no views: the only SwiftUI left is the empty `Settings`
+  scene, which exists because `App` requires a `body`.
 
 ### Source selection
 
@@ -228,7 +231,7 @@ the exact moment the first line appears. `.idle`, `.noLyrics`, `.paused` and
 
 The placeholder width comes from `MenuBarMetrics.placeholderBoxWidth(for:)`, with
 a `minimumPlaceholderWidth` floor so the item stays comfortably clickable — the
-popover is only reachable through it.
+menu is only reachable through it.
 
 ### The width is SET directly, and the lyric is real text
 
@@ -327,7 +330,7 @@ zero-width, unclickable item; an explicitly-set `length` guarantees that
 regardless of the string, and a permanent glyph beside text the user is reading just competes
 with it. What replaces it is an invariant one level up: `PlaybackModel.lineText`
 is a computed property that **can never be empty** — every "nothing to read" case
-falls back to `♪`, so the box always has something visible and the popover is
+falls back to `♪`, so the box always has something visible and the menu is
 always reachable. Keep that guarantee where it is; scattering placeholder
 assignments across the tick branches is what it replaced.
 
@@ -754,32 +757,59 @@ Likewise `init` cannot read one already-assigned property to compute another
 (the macro routes them through accessors), so `init` computes into locals first.
 
 **Settable observable properties use an explicit `get`/`set` over a private
-store**, not `didSet`. That is what lets the pull-down bind `Picker`/`Toggle`
-directly via `@Bindable` while the setter still persists to `UserDefaults` and
-rebuilds the reflow. Do not "simplify" them into plain stored properties with
-observers.
+store**, not `didSet`, so the setter can persist to `UserDefaults` and rebuild
+the reflow while the getter stays a plain read. They were shaped this way to bind
+SwiftUI `Picker`/`Toggle` via `@Bindable`; the menu sets them directly now, but
+the shape is still what keeps persistence out of the call sites. Do not
+"simplify" them into plain stored properties with observers.
 
-**We own the popover, so we own its lifecycle.** `NSPopover` with
-`behavior = .transient` handles dismissal on an outside click; `togglePopover`
-handles the item's own click, and calls `NSApp.activate()` first so the popover
-can take key focus from an `LSUIElement` app. A menu row style was never an option
-— it cannot show the track header and the previous/current/next triplet.
+### Clicking the item opens a menu, and there is no popover
 
-Settings and Quit still live in an ellipsis `Menu` inside the popover header.
-Now that the item is hand-rolled, a **real right-click menu is finally reachable**
-(`statusItem.menu`, or distinguishing the button's mouse event) — it is simply not
-wired up yet.
+`statusItem.menu = menu` — AppKit shows it on click, highlights the button while
+it is open, and dismisses it. There is no `togglePopover`, no `NSApp.activate()`,
+no `NSHostingController`, and no view code at all outside the empty `Settings`
+scene.
 
-**The pull-down's first item is "Hide Lyrics", not "Pause Lyrics".** It sits
-directly under a header showing the track and artist, where "Pause" reads as
-*pause the music* — a thing this app deliberately cannot do. The model property
-is `isHidden` and the header it sets is "Lyrics hidden" for the same reason;
-`DisplayState.paused` still means the player is paused, and the hidden state
-borrows it because both are "no lyric to show".
+**The popover was deleted because it was mostly empty.** It rendered
+`trackTitle` / `trackArtist` / `trackSubtitle` and the previous/current/next
+triplet, and nothing else — so in four of the seven `DisplayState` cases
+(`instrumental`, `loading`, `noLyrics`, `idle`) it was a track header above a
+blank 108pt box. It also duplicated what Spotify and Music already show, and its
+one genuinely load-bearing string, the Automation explanation, **did not fit**:
+"LyricBar cannot read Spotify or Music" measures 227pt into the ~192pt title
+column at `lineLimit(1)`, so the only state that had to explain itself was
+truncated. An `NSMenu` sizes to its content, so the same string fits.
 
-**The popover shows the song and its lyrics, nothing else.** No transport, no
-seek, no progress — this is a lyrics-only tool and the bridges are read-only by
-design. Anything that is not a lyric belongs in the pull-down.
+**The menu's first row is `model.header`, disabled.** That property was assigned
+in eight places and asserted by four tests while **no view read it** — the status
+vocabulary the app computes ("Loading lyrics…", "No synced lyrics found",
+"Lyrics hidden", "Nothing playing", "Automation access denied") existed and was
+thrown away. Wiring it here is what turns those four empty states into
+informative ones, and it is why the menu is a status surface and not only a
+settings surface. If you ever make the row actionable, it stops being a label;
+keep it disabled.
+
+**The menu is rebuilt in `menuNeedsUpdate`, not kept in sync.** It is opened a
+handful of times a session, so building it fresh is cheaper than observing
+`header`, `isHidden`, `loginEnabled`, `widthPreference` and `displayState` and
+patching items. It also means the login checkmark is read after
+`refreshLoginState()`, which is the only way it can be right — `SMAppService`
+state can change outside the app.
+
+**`autoenablesItems = false`.** With the default on, AppKit disables any item
+whose action nothing in the responder chain validates, which greys out the whole
+menu for an `LSUIElement` app with no main window. Quit therefore targets `NSApp`
+explicitly rather than relying on the chain.
+
+**The first action is "Hide Lyrics", not "Pause Lyrics".** It sits directly under
+the status row showing the track, where "Pause" reads as *pause the music* — a
+thing this app deliberately cannot do. The model property is `isHidden` and the
+header it sets is "Lyrics hidden" for the same reason; `DisplayState.paused`
+still means the player is paused, and the hidden state borrows it because both
+are "no lyric to show".
+
+**The menu is settings and status, nothing else.** No transport, no seek, no
+progress — this is a lyrics-only tool and the bridges are read-only by design.
 
 **Automation permission gates everything.** macOS prompts once per controlled app
 (Spotify, Music). Denied, the app runs and shows no lyrics. The TCC database needs
@@ -846,8 +876,8 @@ equivalents: `SMAppService` over `launchctl`,
 `NSFont.menuBarFont` over a hand-picked font, `NotificationCenter.notifications`
 (async sequence) over `addObserver` + `MainActor.assumeIsolated`, `Regex` literals
 over `NSRegularExpression`, `URL.appending(path:queryItems:)` over force-unwrapped
-`URLComponents`, `ContinuousClock` over `Date` for elapsed time, `Picker` +
-`@Bindable` over hand-rolled `Toggle` bindings, and the async poll loop over
+`URLComponents`, `ContinuousClock` over `Date` for elapsed time, `NSMenu` +
+`NSMenuDelegate` over a hand-rolled panel, and the async poll loop over
 `Timer`. The rewrite deliberately removed those hand-rolls; don't reintroduce them.
 
 ## Automation denial
@@ -862,17 +892,19 @@ appeared.
 rather than `.unavailable`, so the bridges resolve to `BridgeSnapshot.denied`.
 `probeSources` reports a denial **only when nothing else is playing**: one
 refused app must not mask the other working. The item then shows `⚠︎` at full
-opacity instead of the dimmed `♪`, the popover reads "Automation access denied /
-Privacy & Security → Automation", and the pull-down grows an **Open Automation
-Settings…** item that deep-links to
+opacity instead of the dimmed `♪`, the menu's status row reads "Automation access
+denied", and the menu grows an **Open Automation Settings…** item that
+deep-links to
 `x-apple.systempreferences:com.apple.preference.security?Privacy_Automation`.
 
 **That item is gated on `displayState == .denied`** and is absent otherwise. It
 is a recovery action for a state most users never reach, so leaving it in the
 menu permanently costs every user a row to explain a problem they do not have —
-and it appears exactly where the popover has just named the problem. Gate it on
-`displayState`, which is observable, and not on `automationDenied`, which is
-`@ObservationIgnored` and would not re-render the menu.
+and it appears exactly where the status row has just named the problem. Gate it
+on `displayState` and not on `automationDenied`: the latter is
+`@ObservationIgnored`, and while `menuNeedsUpdate` reads both fresh on every open
+so observation no longer decides it, `displayState` is the value the rest of the
+UI already agrees on.
 
 `snapshot()` returns `BridgeSnapshot`, not `NowPlaying?`, precisely so this
 distinction cannot be dropped again — an optional had nowhere to put "denied".
@@ -894,12 +926,16 @@ awaits the per-track fetch `Task`. Prefer driving those over adding sleeps.
 
 Not yet addressed, in rough priority order:
 
-- **The popover's click behaviour is unverified.** The geometry and the fit
-  calibration were measured end-to-end, but opening, closing and re-opening the
-  popover by clicking the item was not. `NSPopover.behavior = .transient` has a
-  known wrinkle where the dismissing click also fires the button action and
-  immediately reopens it. If that shows up, the fix is `.applicationDefined` plus
-  an `NSEvent` global monitor for outside clicks, not a timestamp guard.
+- **The triplet is computed and rendered nowhere.** `previousLine`,
+  `currentLine`, `nextLine`, `updatePopoverLines(at:)` and the `trackTitle` /
+  `trackArtist` / `trackSubtitle` trio all survive the popover's removal, still
+  updating every tick and still covered by `PlaybackModelTests`. They are kept
+  because the popover was removed **for now** — the triplet is the one thing a
+  single-line status item cannot show, so it is the obvious content for any
+  richer surface later. If that surface never arrives, delete them and their
+  tests rather than leaving the model computing for nobody. Note `lines` exists
+  only for them and for the `lines.isEmpty` no-lyrics check; `menuLines` drives
+  everything visible.
 
 - **`position()` cannot report a denial.** `snapshot()` carries the distinction and
   is what drives the UI, so this is cosmetic — but the asymmetry is a trap if
@@ -907,8 +943,9 @@ Not yet addressed, in rough priority order:
 - **The drift watchdog cannot grow the box mid-session** by design; the extra room
   is only picked up on the next launch. If that ever feels stale, the fix is a
   user-initiated "re-measure" action, not making drift bidirectional.
-- **No artwork in the popover.** Both bridges expose it over AppleScript, but
-  reading it per track would add an Apple Event round-trip on the hot path.
+- **No artwork anywhere.** Both bridges expose it over AppleScript, but reading
+  it per track would add an Apple Event round-trip on the hot path, and the menu
+  has nowhere to put it.
 - **`LoginItem` is disabled, not fixed, in development.** `SMAppService.mainApp`
   registers whatever bundle path it was launched from, so a build output would
   register a path that later disappears. `isStableLocation` rejects any path
