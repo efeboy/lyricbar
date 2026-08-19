@@ -26,7 +26,17 @@ Do not reintroduce comments — not even `// MARK:` dividers.
 ## Build, install, run
 
 `open LyricBar.xcodeproj`, then build/run the **LyricBar** scheme (⌘R). There is
-no `swift build` step and no `launchctl`/`codesign` deploy dance.
+no `swift build` step and no `launchctl` deploy dance.
+
+**To get a change into the app the user actually runs, use the `ship` skill**
+(`.claude/skills/ship/SKILL.md`), which drives `Scripts/dist.sh` and then
+verifies the install. The one rule worth repeating here: **never `ditto` an
+`xcodebuild build` output into `/Applications`.** It is signed `Apple
+Development`, keeps `get-task-allow`, is single-architecture, and `spctl`
+rejects it — only `archive` + `-exportArchive` produce a distributable. The
+invariant the skill maintains is that exactly one current `LyricBar.app` exists,
+at `/Applications`; the app shows no version anywhere, so a stale copy launched
+from Spotlight is indistinguishable from a fix that did not work.
 
 The target is already configured this way; each of these is load-bearing, so
 don't "clean them up":
