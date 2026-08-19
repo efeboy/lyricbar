@@ -109,15 +109,37 @@ working one. See CLAUDE.md, "The width detection logs itself".
 mdfind "kMDItemFSName == 'LyricBar.app'" | grep -v '/.Trash/'
 ```
 
-Anything older than `/Applications` can be offered by Spotlight and picked by
-the user. Move Xcode `DerivedData` copies to `~/.Trash/lyricbar-stale-<stamp>/`.
+**A healthy machine prints exactly one line: `/Applications/LyricBar.app`.**
+Anything else can be offered by Spotlight and picked by the user.
 
-**Leave `dist/` alone.** Those are deliberate signed release archives, not
-clutter. Ask before touching them.
+Move build outputs - `DerivedData`, the repo's `build/`, and the `export/` copy
+a local ship just installed from - to `~/.Trash/lyricbar-stale-<stamp>/`. The
+export copy is the easiest one to forget: it is byte-identical to what you just
+installed, which makes it the most convincing wrong answer Spotlight can give.
 
-Xcode recreates `DerivedData` bundles on the next IDE build, so this reduces the
-trap rather than removing it. If the user reports odd behaviour, re-run the
-`mdfind` sweep before debugging code.
+**Ask before touching `dist/`.** The `.dmg` at its root is the deliverable and
+must stay. The timestamped run folders under it are intermediates
+(`xcarchive` + `export/` + `stage/`), and each one adds two more indexed
+bundles.
+
+### Stop them being indexed in the first place
+
+`.metadata_never_index` is Apple's marker for "do not index this directory
+tree". `Scripts/dist.sh` now creates one in `dist/` before it archives; the
+same marker belongs anywhere builds land:
+
+```sh
+touch ~/Library/Developer/Xcode/DerivedData/.metadata_never_index
+touch <repo>/build/.metadata_never_index
+```
+
+**The marker is not retroactive.** It stops future indexing; bundles already in
+the index stay there, and moving the directory does not flush them - measured.
+So the marker prevents the next trap while the `~/.Trash` sweep clears the
+current one. Both are needed.
+
+If the user reports odd behaviour, or says the app is not what you built, run
+the `mdfind` sweep before debugging code.
 
 ## Do not
 

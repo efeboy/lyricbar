@@ -52,6 +52,14 @@ grep "$CERT" <<<"$IDENTITIES"
 
 mkdir -p "$WORK"
 
+# Keep Spotlight out of the output tree. Every run leaves a LyricBar.app in
+# export/ and another in stage/, and an indexed bundle is one Spotlight can
+# offer the user in place of the real install — which is exactly how a fixed
+# bug went on being reported for hours. `.metadata_never_index` is Apple's
+# marker for "do not index this directory tree"; it only takes effect for
+# content indexed after it exists, hence creating it before the archive.
+touch "$OUT/.metadata_never_index"
+
 # archive, NOT build. `xcodebuild build` signs with the development certificate,
 # leaves get-task-allow in place, and emits a single-architecture binary despite
 # ARCHS listing both. Only the archive/export workflow produces a distributable.
