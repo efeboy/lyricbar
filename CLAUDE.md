@@ -617,8 +617,11 @@ but if a future change makes `render()` fire per frame, gate `logFit` first.
 In the menu bar font a character spans 3.47pt ("i") to 12.85pt ("W") — a factor
 of 3.7. A character budget sized for average text lets a capital-heavy line
 overrun the fixed box; sized for the worst case it wastes most of the bar.
-`MenuBarMetrics.typicalCharacters` reports a count for the Width menu, and is a
-readout only — never a layout input.
+`MenuBarMetrics.typicalCharacters` used to report a count in the Width menu — a
+readout only, never a layout input. It is gone with the labels it fed: a menu row
+reading `Standard (~37 characters)` states a number the user cannot do anything
+with, in a control whose only honest job is taste. Don't put a measurement back
+into a menu title.
 
 The font is **`NSFont.menuBarFont(ofSize:)`**, the documented font for menu bar
 items, rather than a hand-picked `systemFont(ofSize: 13, weight: .semibold)`.
@@ -631,10 +634,18 @@ indicative, not exact.
 They were absolute (120 / 280 / 360 / ∞, clamped down by the fit) and that is a
 trap on a crowded menu bar: with the fit at 254pt, Standard, Wide and Fit Menu Bar
 *all* clamped to 254, so the menu offered four choices and three of them did
-nothing. Shares (0.45 / 0.65 / 0.82 / 1.0) are guaranteed distinct and ordered on
-any display, which is the whole point of a control that adapts to the device.
+nothing. Shares (0.5 / 0.75 / 1.0) are guaranteed distinct and ordered on any
+display, which is the whole point of a control that adapts to the device.
 `bandsStayDistinct` in `MenuBarBoxTests` pins that; don't reintroduce absolute
 points without it failing.
+
+**There are three bands, not four, and `wide` (0.82) is the one that went.**
+Wide and Fit Menu Bar differ by a fifth of the fit on a control the user cannot
+preview before choosing, and the fit calibration already sizes the item to the
+real bar — so the band picker is taste, and taste does not need a fourth notch.
+A stored `"wide"` preference from an older build no longer decodes and falls
+back to the `.fill` default; there is deliberately no migration for a cosmetic
+one-off. Both tests iterate `LyricWidth.allCases`, so neither pins the count.
 
 `lyricBoxWidth` is also the reflow budget — with no icon slot the box and the text
 area are one span, so there is deliberately only one number. Note that

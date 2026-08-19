@@ -7,7 +7,6 @@ enum MenuBarMetrics {
     static let minimumFontSize: CGFloat = 9
     private static let nonNotchedStripShare: CGFloat = 0.45
     private static let fallbackStripWidth: CGFloat = 400
-    private static let sample = "Was the sky so grey at dawn"
 
     static func font(ofSize size: CGFloat = 0) -> NSFont {
         .menuBarFont(ofSize: size)
@@ -55,22 +54,15 @@ enum MenuBarMetrics {
     static func placeholderBoxWidth(for glyph: String) -> CGFloat {
         max(minimumPlaceholderWidth, (textWidth(glyph) + placeholderSidePadding * 2).rounded())
     }
-
-    static func typicalCharacters(inBoxWidth boxWidth: CGFloat) -> Int {
-        let perCharacter = textWidth(sample) / CGFloat(sample.count)
-        guard perCharacter > 0 else { return 0 }
-        return Int((boxWidth / perCharacter).rounded(.down))
-    }
 }
 
 enum LyricWidth: String, CaseIterable, Sendable {
-    case compact, standard, wide, fill
+    case compact, standard, fill
 
     var shareOfFit: CGFloat {
         switch self {
-        case .compact:  0.45
-        case .standard: 0.65
-        case .wide:     0.82
+        case .compact:  0.5
+        case .standard: 0.75
         case .fill:     1.0
         }
     }
@@ -79,7 +71,6 @@ enum LyricWidth: String, CaseIterable, Sendable {
         switch self {
         case .compact:  "Compact"
         case .standard: "Standard"
-        case .wide:     "Wide"
         case .fill:     "Fit Menu Bar"
         }
     }

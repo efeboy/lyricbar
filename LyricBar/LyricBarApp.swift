@@ -101,7 +101,7 @@ private struct OptionsMenu: View {
 
             Picker("Width", selection: $model.widthPreference) {
                 ForEach(LyricWidth.allCases, id: \.self) { width in
-                    Text(label(for: width)).tag(width)
+                    Text(width.title).tag(width)
                 }
             }
 
@@ -121,10 +121,5 @@ private struct OptionsMenu: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-    }
-
-    private func label(for width: LyricWidth) -> String {
-        let box = MenuBarMetrics.boxWidth(width, fittedWidth: model.fittedWidth)
-        return "\(width.title) (~\(MenuBarMetrics.typicalCharacters(inBoxWidth: box)) characters)"
     }
 }
