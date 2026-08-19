@@ -150,8 +150,8 @@ Files under `LyricBar/`:
   `index(at:)` binary-searches the active line.
 - **`Lyrics/LyricReflow.swift`** — splits lines too wide for the menu bar across
   their own time window, and hands each chunk a timestamp.
-- **`MenuBarMetrics.swift`** — text measurement, the `LyricWidth` bands,
-  `UpdateSpeed`, and the screen geometry the calibration starts from.
+- **`MenuBarMetrics.swift`** — text measurement, the `LyricWidth` bands, and the
+  screen geometry the calibration starts from.
 - **`MenuBarFit.swift`** — measures how wide the item can actually be on *this*
   menu bar, by watching the real status item. See below.
 - **`FitLog.swift`** — the `os.Logger` handles and the geometry formatters the
@@ -176,9 +176,9 @@ Files under `LyricBar/`:
 **playing**; if none is playing it falls back to a **paused** source so its header
 still shows, and it separately reports whether any source refused Automation.
 **Spotify wins ties** (it is listed first). Metadata is probed about once a second
-— gated on `ContinuousClock` elapsed time, not on a tick counter, so the rate is
-the same at every update speed. Only `player position` runs at the finer tick, and
-it is extrapolated between probes (`lastPosition + elapsed`), which is exact apart
+— gated on `ContinuousClock` elapsed time, not on a tick counter, so it stays once
+a second whatever `tickInterval` is. Only `player position` runs at the finer
+`tickInterval` (0.5s), and it is extrapolated between probes (`lastPosition + elapsed`), which is exact apart
 from seeks — the next probe corrects those.
 
 `ContinuousClock`, not `Date`, deliberately: `Date` is wall-clock and jumps on
@@ -796,9 +796,16 @@ something reachable if the repository ever moves.
 
 On the old AppKit build, steady state was ~4.5% of one core and it was **menu-bar
 status-item overhead, not the poll loop** — measured identical whether playing or
-paused. Treat per-tick-rate CPU claims with suspicion: don't advertise the update
-speed options as CPU tradeoffs without re-profiling the SwiftUI build first. The
-`UpdateSpeed` titles describe responsiveness only, for that reason.
+paused. Treat per-tick-rate CPU claims with suspicion: don't reintroduce a tick
+rate *setting* on CPU grounds without re-profiling the SwiftUI build first.
+
+**There used to be an `UpdateSpeed` picker** (200ms / 500ms / 1s) and it was
+removed as an option nobody could act on. It was never a CPU tradeoff — see the
+paragraph above, which is why its titles only ever claimed responsiveness — and
+lyric lines change every few seconds, so none of the three settings differed
+perceptibly. `PlaybackModel.tickInterval` is the surviving constant, fixed at the
+old `.balanced` value (0.5s). The `tickInterval` defaults key it persisted under
+is now unread; leaving a stale key behind is harmless, and nothing migrates it.
 
 Measure with cumulative CPU time over ≥60s, not instantaneous `ps %cpu` — the load
 is bursty and sampling gives readings between 1.5% and 9% for the same steady
@@ -806,7 +813,7 @@ state.
 
 ## Conventions
 
-Tuning lives near its use (`UpdateSpeed`, the `LyricWidth` bands,
+Tuning lives near its use (`PlaybackModel.tickInterval`, the `LyricWidth` bands,
 `MenuBarMetrics.minimumBoxWidth` / `minimumFontSize`, `MenuBarFit.probeResolution`
 and its timeouts, `LyricReflow.minChunkDuration`). Prefer a named constant over a
 literal, since a name is the only explanation the source is allowed to carry.

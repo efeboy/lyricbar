@@ -84,19 +84,3 @@ enum LyricWidth: String, CaseIterable, Sendable {
         }
     }
 }
-
-enum UpdateSpeed: Double, CaseIterable, Sendable {
-    case smooth = 0.2
-    case balanced = 0.5
-    case relaxed = 1.0
-
-    var seconds: Double { rawValue }
-
-    var title: String {
-        switch self {
-        case .smooth:   "Smooth (200 ms)"
-        case .balanced: "Balanced (500 ms)"
-        case .relaxed:  "Relaxed (1 s)"
-        }
-    }
-}

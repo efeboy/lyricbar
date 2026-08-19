@@ -46,15 +46,6 @@ final class PlaybackModel {
         }
     }
 
-    var updateSpeed: UpdateSpeed {
-        get { storedSpeed }
-        set {
-            guard newValue != storedSpeed else { return }
-            storedSpeed = newValue
-            defaults.set(newValue.rawValue, forKey: Keys.speed)
-        }
-    }
-
     var isPaused: Bool {
         get { paused }
         set {
@@ -95,7 +86,6 @@ final class PlaybackModel {
 
     private var chunk = ""
     private var storedWidth: LyricWidth
-    private var storedSpeed: UpdateSpeed
     private var paused = false
     private var loginRegistered = LoginItem.isEnabled
 
@@ -141,6 +131,7 @@ final class PlaybackModel {
     private static let deniedTitle = "Automation access denied"
     private static let deniedDetail = "LyricBar cannot read Spotify or Music"
     private static let deniedHint = "Privacy & Security → Automation"
+    private static let tickInterval: Double = 0.5
     private static let metadataInterval: Double = 1
     private static let recalibrationCooldown: Double = 30
     private static let driftProbesBeforeRecalibration = 2
@@ -148,7 +139,6 @@ final class PlaybackModel {
 
     private enum Keys {
         static let width = "lyricWidth"
-        static let speed = "tickInterval"
     }
 
     init(defaults: UserDefaults = .standard,
@@ -159,12 +149,10 @@ final class PlaybackModel {
         self.lyrics = lyrics
 
         let width = LyricWidth(rawValue: defaults.string(forKey: Keys.width) ?? "") ?? .fill
-        let speed = UpdateSpeed(rawValue: defaults.double(forKey: Keys.speed)) ?? .balanced
         let cached = MenuBarFit.cachedFit(for: MenuBarFit.signature(), in: defaults)
         let fitted = cached?.boxWidth ?? MenuBarMetrics.minimumBoxWidth
 
         storedWidth = width
-        storedSpeed = speed
         fittedWidth = fitted
         lyricBoxWidth = MenuBarMetrics.boxWidth(width, fittedWidth: fitted)
         expectedRightEdge = cached?.rightEdge
@@ -369,10 +357,9 @@ final class PlaybackModel {
         pollTask = Task { [weak self] in
             while true {
                 guard let self, !Task.isCancelled else { return }
-                let interval = self.storedSpeed.seconds
                 self.tick()
                 do {
-                    try await Task.sleep(for: .seconds(interval))
+                    try await Task.sleep(for: .seconds(PlaybackModel.tickInterval))
                 } catch {
                     return
                 }

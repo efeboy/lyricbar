@@ -105,12 +105,6 @@ private struct OptionsMenu: View {
                 }
             }
 
-            Picker("Update Speed", selection: $model.updateSpeed) {
-                ForEach(UpdateSpeed.allCases, id: \.self) { speed in
-                    Text(speed.title).tag(speed)
-                }
-            }
-
             Divider()
 
             Button("Open Automation Settings…") {
