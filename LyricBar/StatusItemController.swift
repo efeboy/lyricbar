@@ -60,7 +60,7 @@ final class StatusItemController: NSObject {
     private func logFit(text: String, box: CGFloat, window: NSWindow?) {
         let state = model.displayState
         let lyricBox = model.lyricBoxWidth
-        let probing = box != lyricBox && state.holdsLyric
+        let probing = box != lyricBox
         let size = LyricText.fittedFontSize(for: text, boxWidth: box)
         let drawn = MenuBarMetrics.textWidth(text, fontSize: size)
         let overflow = drawn - box

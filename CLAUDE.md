@@ -353,10 +353,23 @@ bottoms out at 9pt, the text still overflows, and `.byClipping` clips it mid-wor
 Observed live as `Somewher` in a ~40pt item, when FaceTime added a status item
 mid-song and the drift watchdog recalibrated underneath the lyric.
 
+The **guard** is `probeWidth != nil`, read in `lineText` — that is the real
+signal and it is exact. The `render` log's `probing=` field is a *derived*
+approximation, `box != lyricBox`, because the controller cannot see `probeWidth`.
+It used to also require `state.holdsLyric`, which was right only while the box
+collapsed by state: a differing box could then mean either a probe or a
+placeholder. Now that every state shares one width, `box != lyricBox` means a
+probe and nothing else, so the extra term only made probe-time renders in
+non-lyric states log `probing=false`. Observed on the drift recalibration that
+followed this change: `box=244 lyricBox=247 probing=false` while a probe was
+plainly driving it.
+
 Measured across a launch calibration with music playing, the box walks
 32 → 80 → 268 → 80 → 174 → 174 → 221 → 245 → 257 → 245 → 251 → 245 (the 268 → 80
 step is a rejection recovering to the floor). **All twelve of those renders must be
-the placeholder**; the nine that follow, at a settled 245pt, are the lyric. A live
+the placeholder**; the nine that follow, at a settled 245pt, are the lyric. A
+drift-triggered run measured after the box was unified walks
+80 → 308 → 80 → 194 → 251 → 194 → 223 → 237 → 244 → 237 and converges at 237. A live
 check that counts clips is the only way to see this — no test can, because the
 probe sequence needs a real menu bar.
 
