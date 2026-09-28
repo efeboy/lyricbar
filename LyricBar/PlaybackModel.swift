@@ -180,9 +180,9 @@ final class PlaybackModel {
             || NSClassFromString("XCTestCase") != nil
     }
 
-    func refreshNow() {
+    func refreshNow() async {
         lastMetadataProbe = nil
-        tick()
+        await tick()
     }
 
     func awaitPendingLyrics() async {
@@ -354,7 +354,7 @@ final class PlaybackModel {
         pollTask = Task { [weak self] in
             while true {
                 guard let self, !Task.isCancelled else { return }
-                self.tick()
+                await self.tick()
                 do {
                     try await Task.sleep(for: .seconds(PlaybackModel.tickInterval))
                 } catch {
@@ -364,16 +364,17 @@ final class PlaybackModel {
         }
     }
 
-    private func tick() {
+    private func tick() async {
         guard !hidden else { return }
-        let now = clock.now
+        let started = clock.now
         let probeMetadata = lastMetadataProbe
-            .map { $0.duration(to: now).seconds >= Self.metadataInterval } ?? true
+            .map { $0.duration(to: started).seconds >= Self.metadataInterval } ?? true
 
         if probeMetadata {
-            lastMetadataProbe = now
-            checkFitDrift(now: now)
-            let probe = probeSources()
+            lastMetadataProbe = started
+            checkFitDrift(now: started)
+            let probe = await probeSources()
+            guard !hidden else { return }
             automationDenied = probe.denied && probe.active == nil
             activeBridge = probe.active?.bridge
             lastSnapshot = probe.active?.snapshot
@@ -407,24 +408,19 @@ final class PlaybackModel {
             return
         }
 
-        guard let position = position(from: bridge, probing: probeMetadata, now: now) else { return }
+        guard let position = await position(from: bridge, probing: probeMetadata),
+              !hidden, snapshot.trackID == currentTrackID else { return }
         updateMenuLine(at: position)
         updatePopoverLines(at: position)
     }
 
-    private func position(from bridge: PlaybackBridge,
-                          probing: Bool,
-                          now: ContinuousClock.Instant) -> Double? {
-        if probing, let probed = bridge.position() {
-            positionSample = (probed, now)
+    private func position(from bridge: PlaybackBridge, probing: Bool) async -> Double? {
+        if probing || positionSample == nil, let probed = await bridge.position() {
+            positionSample = (probed, clock.now)
             return probed
         }
-        if let sample = positionSample {
-            return sample.position + sample.at.duration(to: now).seconds
-        }
-        guard let probed = bridge.position() else { return nil }
-        positionSample = (probed, now)
-        return probed
+        guard let sample = positionSample else { return nil }
+        return sample.position + sample.at.duration(to: clock.now).seconds
     }
 
     private struct SourceProbe {
@@ -432,10 +428,10 @@ final class PlaybackModel {
         var denied = false
     }
 
-    private func probeSources() -> SourceProbe {
+    private func probeSources() async -> SourceProbe {
         var probe = SourceProbe()
         for bridge in bridges {
-            switch bridge.snapshot() {
+            switch await bridge.snapshot() {
             case .denied:
                 probe.denied = true
             case .unavailable:

@@ -1,29 +1,33 @@
 import Foundation
 
-final class SpotifyBridge: PlaybackBridge {
+actor SpotifyBridge: PlaybackBridge {
 
-    let source: PlaybackSource = .spotify
+    nonisolated let source: PlaybackSource = .spotify
 
     private static let millisecondThreshold: Double = 10_000
 
     private let snapshotScript = PlaybackScript.compiled("""
     tell application "Spotify"
         if it is not running then return "\(PlaybackScript.notRunning)"
-        set pState to player state as text
-        if pState is "\(PlaybackScript.stopped)" then return "\(PlaybackScript.stopped)"
-        set theTrack to current track
-        return pState & "\(PlaybackScript.unitSeparator)" & (id of theTrack) ¬
-            & "\(PlaybackScript.unitSeparator)" & (name of theTrack) ¬
-            & "\(PlaybackScript.unitSeparator)" & (artist of theTrack) ¬
-            & "\(PlaybackScript.unitSeparator)" & (album of theTrack) ¬
-            & "\(PlaybackScript.unitSeparator)" & (duration of theTrack)
+        with timeout of \(PlaybackScript.eventTimeoutSeconds) seconds
+            set pState to player state as text
+            if pState is "\(PlaybackScript.stopped)" then return "\(PlaybackScript.stopped)"
+            set theTrack to current track
+            return pState & "\(PlaybackScript.unitSeparator)" & (id of theTrack) ¬
+                & "\(PlaybackScript.unitSeparator)" & (name of theTrack) ¬
+                & "\(PlaybackScript.unitSeparator)" & (artist of theTrack) ¬
+                & "\(PlaybackScript.unitSeparator)" & (album of theTrack) ¬
+                & "\(PlaybackScript.unitSeparator)" & (duration of theTrack)
+        end timeout
     end tell
     """)
 
     private let positionScript = PlaybackScript.compiled("""
     tell application "Spotify"
         if it is not running then return -1
-        return player position
+        with timeout of \(PlaybackScript.eventTimeoutSeconds) seconds
+            return player position
+        end timeout
     end tell
     """)
 

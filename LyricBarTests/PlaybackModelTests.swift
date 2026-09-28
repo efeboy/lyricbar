@@ -2,15 +2,16 @@ import Testing
 import Foundation
 @testable import LyricBar
 
+@MainActor
 private final class FakeBridge: PlaybackBridge {
-    let source: PlaybackSource
+    nonisolated let source: PlaybackSource
     var next: BridgeSnapshot = .unavailable
     var positionValue: Double?
 
     init(source: PlaybackSource) { self.source = source }
 
-    func snapshot() -> BridgeSnapshot { next }
-    func position() -> Double? { positionValue }
+    func snapshot() async -> BridgeSnapshot { next }
+    func position() async -> Double? { positionValue }
 }
 
 private struct FakeLyrics: LyricsProvider {
@@ -51,10 +52,10 @@ struct PlaybackModelTests {
     ]
 
     @Test("Nothing playing reads as idle, and the box does not move")
-    func idleWhenNothingPlays() {
+    func idleWhenNothingPlays() async {
         let model = makeModel(bridges: [FakeBridge(source: .spotify)])
 
-        model.refreshNow()
+        await model.refreshNow()
 
         #expect(model.displayState == .idle)
         #expect(model.lineText == "♪")
@@ -62,12 +63,12 @@ struct PlaybackModelTests {
     }
 
     @Test("A refused Automation prompt is reported, not silently ignored")
-    func automationDenialIsSurfaced() {
+    func automationDenialIsSurfaced() async {
         let spotify = FakeBridge(source: .spotify)
         spotify.next = .denied
         let model = makeModel(bridges: [spotify])
 
-        model.refreshNow()
+        await model.refreshNow()
 
         #expect(model.displayState == .denied)
         #expect(model.trackTitle == "Automation access denied")
@@ -77,26 +78,26 @@ struct PlaybackModelTests {
     }
 
     @Test("One denied source does not mask another that is playing")
-    func denialIgnoredWhenSomethingElsePlays() {
+    func denialIgnoredWhenSomethingElsePlays() async {
         let spotify = FakeBridge(source: .spotify)
         spotify.next = .denied
         let music = FakeBridge(source: .appleMusic)
         music.next = track("m1", title: "Blackbird", source: .appleMusic)
         let model = makeModel(bridges: [spotify, music])
 
-        model.refreshNow()
+        await model.refreshNow()
 
         #expect(model.displayState != .denied)
         #expect(model.trackTitle == "Blackbird")
     }
 
     @Test("A new track reports loading while the fetch is still in flight")
-    func loadingBeforeTheFetchLands() {
+    func loadingBeforeTheFetchLands() async {
         let spotify = FakeBridge(source: .spotify)
         spotify.next = track("s1")
         let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
 
-        model.refreshNow()
+        await model.refreshNow()
 
         #expect(model.displayState == .loading)
         #expect(model.header == "Loading lyrics…")
@@ -110,7 +111,7 @@ struct PlaybackModelTests {
         spotify.next = track("s1")
         let model = makeModel(bridges: [spotify], lyrics: .unavailable)
 
-        model.refreshNow()
+        await model.refreshNow()
         #expect(model.displayState == .loading)
 
         await model.awaitPendingLyrics()
@@ -126,10 +127,10 @@ struct PlaybackModelTests {
         spotify.next = track("s1")
         let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
 
-        model.refreshNow()
+        await model.refreshNow()
         await model.awaitPendingLyrics()
         spotify.positionValue = 25
-        model.refreshNow()
+        await model.refreshNow()
 
         #expect(model.displayState == .playing)
         #expect(model.lineText == "second")
@@ -144,24 +145,24 @@ struct PlaybackModelTests {
         spotify.next = track("s1")
         let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
 
-        model.refreshNow()
+        await model.refreshNow()
         await model.awaitPendingLyrics()
         spotify.positionValue = 2
-        model.refreshNow()
+        await model.refreshNow()
 
         #expect(model.displayState == .instrumental)
         #expect(model.boxWidth == model.lyricBoxWidth)
     }
 
     @Test("Spotify wins when both apps are playing")
-    func spotifyWinsTies() {
+    func spotifyWinsTies() async {
         let spotify = FakeBridge(source: .spotify)
         spotify.next = track("s1", title: "Girl")
         let music = FakeBridge(source: .appleMusic)
         music.next = track("m1", title: "Blackbird", source: .appleMusic)
         let model = makeModel(bridges: [spotify, music])
 
-        model.refreshNow()
+        await model.refreshNow()
 
         #expect(model.trackTitle == "Girl")
     }
@@ -172,9 +173,9 @@ struct PlaybackModelTests {
         spotify.next = track("s1", state: .paused)
         let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
 
-        model.refreshNow()
+        await model.refreshNow()
         await model.awaitPendingLyrics()
-        model.refreshNow()
+        await model.refreshNow()
 
         #expect(model.displayState == .paused)
         #expect(model.trackTitle == "Girl")
@@ -187,7 +188,7 @@ struct PlaybackModelTests {
         spotify.next = track("s1")
         let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
 
-        model.refreshNow()
+        await model.refreshNow()
         await model.awaitPendingLyrics()
 
         model.isHidden = true
@@ -195,7 +196,7 @@ struct PlaybackModelTests {
         #expect(model.header == "Lyrics hidden")
 
         spotify.positionValue = 25
-        model.refreshNow()
+        await model.refreshNow()
         #expect(model.displayState == .paused)
 
         model.isHidden = false
@@ -209,9 +210,9 @@ struct PlaybackModelTests {
         let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
 
         spotify.positionValue = 25
-        model.refreshNow()
+        await model.refreshNow()
         await model.awaitPendingLyrics()
-        model.refreshNow()
+        await model.refreshNow()
         try? #require(model.lineText == "second")
 
         model.isHidden = true
@@ -228,13 +229,13 @@ struct PlaybackModelTests {
         let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
 
         spotify.positionValue = 25
-        model.refreshNow()
+        await model.refreshNow()
         await model.awaitPendingLyrics()
-        model.refreshNow()
+        await model.refreshNow()
         try? #require(model.lineText == "second")
 
         spotify.next = .unavailable
-        model.refreshNow()
+        await model.refreshNow()
 
         #expect(model.displayState == .idle)
         #expect(!model.displayState.holdsLyric)

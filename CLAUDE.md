@@ -148,7 +148,8 @@ Files under `LyricBar/`:
   and `PlaybackScript`, which holds the AppleScript plumbing both bridges share
   (compile, read a numeric descriptor, split a separator-delimited snapshot).
 - **`Playback/SpotifyBridge.swift`**, **`Playback/MusicBridge.swift`** — each is
-  now just two script sources plus the source-specific duration handling.
+  an `actor` holding two script sources plus the source-specific duration
+  handling. See "AppleScript never runs on the main actor".
 - **`Lyrics/LRCParser.swift`** — turns `[mm:ss.xx]` tags into sorted `LyricLine`s;
   `index(at:)` binary-searches the active line.
 - **`Lyrics/LyricReflow.swift`** — splits lines too wide for the menu bar across
@@ -189,6 +190,31 @@ from seeks — the next probe corrects those.
 `ContinuousClock`, not `Date`, deliberately: `Date` is wall-clock and jumps on
 NTP corrections and daylight-saving changes, which would make the extrapolated
 position leap. Timing that measures *elapsed* time must be monotonic.
+
+### AppleScript never runs on the main actor
+
+`SpotifyBridge` and `MusicBridge` are **actors**, and `PlaybackBridge` is
+`Sendable` with `async` `snapshot()` / `position()`. `NSAppleScript` blocks its
+thread until the target app replies, and the default Apple Event timeout is
+about two minutes, so running it on the main actor (as the app used to) meant a
+hung Spotify froze the status item and its menu with it. Each actor owns its own
+compiled scripts, so a single `NSAppleScript` instance is never used from two
+threads at once — the actor's serial execution is the whole thread-safety story.
+
+Every script also wraps its application commands in
+`with timeout of PlaybackScript.eventTimeoutSeconds seconds` (2s). Off the main
+actor a hang no longer freezes the UI, but it would still stall the poll loop,
+which awaits each probe; the timeout bounds that stall. A timed-out event is
+error -1712, which is not a denial code, so it resolves to `.unavailable` and
+the item falls back to idle rather than to `⚠︎`. Keep `if it is not running`
+**outside** the timeout block: it is answered locally and must not wait.
+
+`tick()` is `async` for this reason, and it **re-checks `hidden` and
+`currentTrackID` after every `await`**: the user can hide lyrics, or a probe can
+change tracks, while a bridge call is suspended, and applying a stale result
+after that would redraw a lyric the user just hid. The position sample is
+stamped with `clock.now` *after* `position()` returns, not with the tick's start
+time, so probe latency does not skew the extrapolation.
 
 ## The menu bar item
 
@@ -936,9 +962,12 @@ the tick logic with fakes and never touches Apple Events or the network.
 not for a second implementation.
 
 Two internal methods exist for tests and nothing else, and their names say so:
-`refreshNow()` clears `lastMetadataProbe` and ticks, so a test gets a full
-metadata probe rather than waiting out `metadataInterval`; `awaitPendingLyrics()`
-awaits the per-track fetch `Task`. Prefer driving those over adding sleeps.
+`refreshNow()` clears `lastMetadataProbe` and awaits one tick, so a test gets a
+full metadata probe rather than waiting out `metadataInterval`;
+`awaitPendingLyrics()` awaits the per-track fetch `Task`. Prefer driving those
+over adding sleeps. The test `FakeBridge` is a `@MainActor` class with a
+`nonisolated let source` — that is what makes it `Sendable` while the
+`@MainActor` suite still mutates `next` and `positionValue` directly.
 
 ## Known gaps
 

@@ -1,32 +1,36 @@
 import Foundation
 
-final class MusicBridge: PlaybackBridge {
+actor MusicBridge: PlaybackBridge {
 
-    let source: PlaybackSource = .appleMusic
+    nonisolated let source: PlaybackSource = .appleMusic
 
     private let snapshotScript = PlaybackScript.compiled("""
     tell application "Music"
         if it is not running then return "\(PlaybackScript.notRunning)"
-        set rawState to player state as text
-        if rawState is "\(PlaybackScript.stopped)" then return "\(PlaybackScript.stopped)"
-        if rawState is "paused" then
-            set pState to "paused"
-        else
-            set pState to "playing"
-        end if
-        set theTrack to current track
-        return pState & "\(PlaybackScript.unitSeparator)" & (persistent ID of theTrack) ¬
-            & "\(PlaybackScript.unitSeparator)" & (name of theTrack) ¬
-            & "\(PlaybackScript.unitSeparator)" & (artist of theTrack) ¬
-            & "\(PlaybackScript.unitSeparator)" & (album of theTrack) ¬
-            & "\(PlaybackScript.unitSeparator)" & (duration of theTrack)
+        with timeout of \(PlaybackScript.eventTimeoutSeconds) seconds
+            set rawState to player state as text
+            if rawState is "\(PlaybackScript.stopped)" then return "\(PlaybackScript.stopped)"
+            if rawState is "paused" then
+                set pState to "paused"
+            else
+                set pState to "playing"
+            end if
+            set theTrack to current track
+            return pState & "\(PlaybackScript.unitSeparator)" & (persistent ID of theTrack) ¬
+                & "\(PlaybackScript.unitSeparator)" & (name of theTrack) ¬
+                & "\(PlaybackScript.unitSeparator)" & (artist of theTrack) ¬
+                & "\(PlaybackScript.unitSeparator)" & (album of theTrack) ¬
+                & "\(PlaybackScript.unitSeparator)" & (duration of theTrack)
+        end timeout
     end tell
     """)
 
     private let positionScript = PlaybackScript.compiled("""
     tell application "Music"
         if it is not running then return -1
-        return player position
+        with timeout of \(PlaybackScript.eventTimeoutSeconds) seconds
+            return player position
+        end timeout
     end tell
     """)
 

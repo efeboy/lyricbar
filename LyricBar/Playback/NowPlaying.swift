@@ -25,14 +25,15 @@ enum BridgeSnapshot: Equatable, Sendable {
     case denied
 }
 
-protocol PlaybackBridge: AnyObject {
+protocol PlaybackBridge: Sendable {
     var source: PlaybackSource { get }
-    func snapshot() -> BridgeSnapshot
-    func position() -> Double?
+    func snapshot() async -> BridgeSnapshot
+    func position() async -> Double?
 }
 
 enum PlaybackScript {
 
+    static let eventTimeoutSeconds = 2
     static let unitSeparator = "\u{001F}"
     static let notRunning = "notrunning"
     static let stopped = "stopped"
