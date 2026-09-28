@@ -65,6 +65,9 @@ final class PlaybackModel {
 
     var loginSupported: Bool { LoginItem.isSupported }
 
+    let appVersion: String
+    private(set) var availableUpdate: Release?
+
     enum DisplayState: String, Equatable {
         case playing, instrumental, loading, noLyrics, paused, idle, denied
 
@@ -110,6 +113,7 @@ final class PlaybackModel {
     @ObservationIgnored private var lastMetadataProbe: ContinuousClock.Instant?
 
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var updateTask: Task<Void, Never>?
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
 
     private static let gapPlaceholder = "♪"
@@ -135,6 +139,7 @@ final class PlaybackModel {
         self.defaults = defaults
         self.bridges = bridges
         self.lyrics = lyrics
+        appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
 
         let width = LyricWidth(rawValue: defaults.string(forKey: Keys.width) ?? "") ?? .fill
         let fit = FitCoordinator(defaults: defaults)
@@ -148,6 +153,7 @@ final class PlaybackModel {
     func start() {
         fit.observeScreenChanges()
         startPolling()
+        startUpdateChecks()
 
         if let cached = fit.launchFit {
             FitLog.calibration.notice("""
@@ -214,6 +220,28 @@ final class PlaybackModel {
                 box=\(FitLog.points(self.fittedWidth), privacy: .public) \
                 lyricBox=\(FitLog.points(self.lyricBoxWidth), privacy: .public)
                 """)
+        }
+    }
+
+    func openAvailableUpdate() {
+        guard let availableUpdate else { return }
+        NSWorkspace.shared.open(availableUpdate.pageURL)
+    }
+
+    private func startUpdateChecks() {
+        let checker = UpdateChecker(currentVersion: appVersion)
+        updateTask?.cancel()
+        updateTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let release = await checker.newerRelease()
+                guard let self else { return }
+                if let release { self.availableUpdate = release }
+                do {
+                    try await Task.sleep(for: UpdateChecker.checkInterval)
+                } catch {
+                    return
+                }
+            }
         }
     }
 

@@ -134,6 +134,18 @@ extension StatusItemController: NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        if let release = model.availableUpdate {
+            let update = NSMenuItem(title: String(localized: "Update Available (\(release.tagName))…"),
+                                    action: #selector(openUpdate), keyEquivalent: "")
+            update.target = self
+            menu.addItem(update)
+        }
+
+        let version = NSMenuItem(title: String(localized: "LyricBar \(model.appVersion)"),
+                                 action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        menu.addItem(version)
+
         let quit = NSMenuItem(title: String(localized: "Quit LyricBar"),
                               action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
@@ -167,6 +179,10 @@ extension StatusItemController: NSMenuDelegate {
     @objc private func selectWidth(_ sender: NSMenuItem) {
         guard let band = sender.representedObject as? LyricWidth else { return }
         model.widthPreference = band
+    }
+
+    @objc private func openUpdate() {
+        model.openAvailableUpdate()
     }
 
     @objc private func openAutomation() {

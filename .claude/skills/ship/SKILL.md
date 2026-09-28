@@ -13,9 +13,10 @@ runs.** Everything else on disk is older than it.
 This exists because it was violated. A fix was committed, verified live, and the
 user still saw the bug for hours - they had launched LyricBar from Spotlight,
 which offered a `DerivedData/Build/Products/Release` copy built eight hours
-before the fix. Ten `LyricBar.app` bundles were indexed at the time. The app has
-no version display and no update check, so **nothing in the UI tells you which
-build you are looking at.** Only the paths and the logs do.
+before the fix. Ten `LyricBar.app` bundles were indexed at the time. The menu
+now shows a version row, but it is the marketing version only, so **two builds
+of the same version look identical in the UI** — and every unreleased fix is one
+of those. Only the paths and the logs tell them apart.
 
 Treat "the user reports a bug we already fixed" as a build-identity question
 first and a code question second.

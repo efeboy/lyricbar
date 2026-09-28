@@ -36,8 +36,10 @@ verifies the install. The one rule worth repeating here: **never `ditto` an
 Development`, keeps `get-task-allow`, is single-architecture, and `spctl`
 rejects it — only `archive` + `-exportArchive` produce a distributable. The
 invariant the skill maintains is that exactly one current `LyricBar.app` exists,
-at `/Applications`; the app shows no version anywhere, so a stale copy launched
-from Spotlight is indistinguishable from a fix that did not work.
+at `/Applications`. The menu's version row shows only the marketing version
+(`CFBundleShortVersionString`), so two builds of the same version — every
+unreleased fix — still look identical, and a stale copy launched from Spotlight
+is indistinguishable from a fix that did not work.
 
 The target is already configured this way; each of these is load-bearing, so
 don't "clean them up":
@@ -73,7 +75,7 @@ Login Items.
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-79 tests in 9 Swift Testing suites:
+82 tests in 10 Swift Testing suites:
 
 - **`LRCParserTests`** — the LRC grammar (fraction separators and digit counts,
   repeated chorus timestamps, CRLF payloads) and `index(at:)` boundaries.
@@ -106,6 +108,11 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
   ties, and Automation denial. `refreshNow()` forces a full metadata probe and
   `awaitPendingLyrics()` waits on the per-track fetch, so every case is
   deterministic without a clock or the network.
+- **`UpdateCheckerTests`** — `isNewer(_:than:)`: numeric, not lexical, comparison
+  (`1.10` beats `1.9`), a missing component counts as zero (`1.1.0` equals
+  `1.1`), and any tag that is not purely dotted integers — `v1.2-beta`,
+  `nightly` — never offers an update. The network half is not tested; see
+  "Updates".
 
 It is a **hosted** bundle (`TEST_HOST` is the app), so `test` launches LyricBar.
 `AppDelegate.isRunningTests` detects that and creates neither the model nor the
@@ -170,6 +177,8 @@ Files under `LyricBar/`:
 - **`Lyrics/LRCLibClient.swift`** — `LRCLibClient` (`Sendable`, runs off the main
   actor).
 - **`LoginItem.swift`** — thin `SMAppService.mainApp` wrapper for the login toggle.
+- **`UpdateChecker.swift`** — asks GitHub whether a newer release exists. See
+  "Updates".
 - **`FitCoordinator.swift`** — `@MainActor @Observable`; drives `MenuBarFit` over
   the app's lifetime: the calibration task and its `probeWidth`, the drift
   watchdog, the screen-change observer, and the `fittedWidth` they produce.
@@ -930,6 +939,35 @@ progress — this is a lyrics-only tool and the bridges are read-only by design.
 Full Disk Access to inspect, so verify via System Settings → Privacy & Security →
 Automation instead. This requires `NSAppleEventsUsageDescription` and, under the
 Hardened Runtime, the `com.apple.security.automation.apple-events` entitlement.
+
+## Updates
+
+LyricBar is shared outside the App Store, so nothing updates it for the user.
+`UpdateChecker` covers the "does a newer build exist" half and nothing more: at
+`start()` and then every `UpdateChecker.checkInterval` (24h) it GETs
+`https://api.github.com/repos/efeboy/lyricbar/releases/latest`, and if that
+release's `tag_name` is newer than the running `CFBundleShortVersionString`,
+the menu grows an **Update Available (vX.Y)…** row that opens the release page.
+Installing is still the user's job — drag the new DMG's app over the old one.
+
+- **It depends on the repository being public.** The endpoint is called
+  without a token (a shipped app cannot carry one), and GitHub answers 404 for a
+  private repository exactly as it does for a missing release — so a repo made
+  private again would silently turn the check off for everyone, with no error
+  anywhere. The repository went public on 2026-09-28, after a history rewrite
+  replaced the author email with the GitHub noreply address and every quoted
+  lyric in tests and docs with an invented line.
+- **404 means "no release yet", not a fault.** Before the first release, and for
+  any response other than 200 with a decodable body, the check returns nil and
+  the row stays absent. There is deliberately no error UI: a failed update check
+  is not something the user can act on.
+- **The unauthenticated rate limit is 60 requests an hour per IP**, measured
+  from `x-ratelimit-limit`. Once a day per running copy is nowhere near it.
+- **Tags must be plain dotted integers, optionally `v`-prefixed** (`v1.2`,
+  `1.2.1`). Anything else is ignored rather than guessed at, so tagging a
+  pre-release `v1.3-beta` cannot push it to friends. Keep `MARKETING_VERSION`
+  and the release tag in step — the comparison is between exactly those two.
+- It is gated like the Automation item: absent unless there is something to do.
 
 ## LRCLIB API
 
