@@ -99,8 +99,8 @@ final class PlaybackModel {
     @ObservationIgnored private var menuLines: [LyricLine] = []
     @ObservationIgnored private var trackDuration: Double = 0
     @ObservationIgnored private var currentTrackID: String?
-    @ObservationIgnored private var shownMenuIndex = -1
-    @ObservationIgnored private var shownLyricIndex = -2
+    @ObservationIgnored private var shownMenuLine: Shown?
+    @ObservationIgnored private var shownLyricLine: Shown?
     @ObservationIgnored private var fetching = false
     @ObservationIgnored private var automationDenied = false
 
@@ -208,7 +208,7 @@ final class PlaybackModel {
 
     private func rebuildMenuLines() {
         menuLines = LyricReflow.expand(lines, trackDuration: trackDuration, width: lyricBoxWidth)
-        shownMenuIndex = -1
+        shownMenuLine = nil
     }
 
     private func calibrate(reason: String) {
@@ -398,7 +398,7 @@ final class PlaybackModel {
 
         guard snapshot.state == .playing else {
             positionSample = nil
-            shownMenuIndex = -1
+            shownMenuLine = nil
             displayState = .paused
             return
         }
@@ -422,6 +422,15 @@ final class PlaybackModel {
         }
         guard let sample = positionSample else { return nil }
         return sample.position + sample.at.duration(to: clock.now).seconds
+    }
+
+    private enum Shown: Equatable {
+        case beforeFirstLine
+        case line(Int)
+
+        init(_ index: Int?) {
+            self = index.map(Shown.line) ?? .beforeFirstLine
+        }
     }
 
     private struct SourceProbe {
@@ -480,35 +489,39 @@ final class PlaybackModel {
     }
 
     private func updateMenuLine(at position: Double) {
-        guard let index = LRCParser.index(at: position, in: menuLines) else {
-            if shownMenuIndex != -1 || displayState != .instrumental {
-                shownMenuIndex = -1
-                chunk = ""
-                displayState = .instrumental
-            }
+        let target = Shown(LRCParser.index(at: position, in: menuLines))
+        guard target != shownMenuLine else { return }
+        shownMenuLine = target
+        guard case .line(let index) = target else {
+            chunk = ""
+            displayState = .instrumental
             return
         }
-        guard index != shownMenuIndex else { return }
-        shownMenuIndex = index
         chunk = menuLines[index].text
         displayState = chunk.isEmpty ? .instrumental : .playing
     }
 
     private func updatePopoverLines(at position: Double) {
-        let index = LRCParser.index(at: position, in: lines) ?? -1
-        guard index != shownLyricIndex else { return }
-        shownLyricIndex = index
+        let target = Shown(LRCParser.index(at: position, in: lines))
+        guard target != shownLyricLine else { return }
+        shownLyricLine = target
+        guard case .line(let index) = target else {
+            previousLine = ""
+            currentLine = ""
+            nextLine = ""
+            return
+        }
         previousLine = index > 0 ? lines[index - 1].text : ""
-        currentLine = index >= 0 ? lines[index].text : ""
-        nextLine = (index >= 0 && index + 1 < lines.count) ? lines[index + 1].text : ""
+        currentLine = lines[index].text
+        nextLine = index + 1 < lines.count ? lines[index + 1].text : ""
     }
 
     private func clear() {
         lines = []
         menuLines = []
         positionSample = nil
-        shownMenuIndex = -1
-        shownLyricIndex = -2
+        shownMenuLine = nil
+        shownLyricLine = nil
         fetching = false
         chunk = ""
         previousLine = ""
@@ -523,8 +536,8 @@ final class PlaybackModel {
     }
 
     private func leaveHidden() {
-        shownMenuIndex = -1
-        shownLyricIndex = -2
+        shownMenuLine = nil
+        shownLyricLine = nil
         positionSample = nil
         if let snapshot = lastSnapshot {
             header = "\(snapshot.title) — \(snapshot.artist)"
@@ -554,14 +567,14 @@ final class PlaybackModel {
                     self.fetching = false
                     self.lines = parsed
                     self.rebuildMenuLines()
-                    self.shownLyricIndex = -2
+                    self.shownLyricLine = nil
                     if !self.hidden { self.header = "\(title) — \(artist)" }
                     return
                 case .unavailable:
                     self.fetching = false
                     self.lines = []
                     self.menuLines = []
-                    self.shownMenuIndex = -1
+                    self.shownMenuLine = nil
                     if !self.hidden {
                         self.chunk = ""
                         self.header = Self.noLyricsHeader
