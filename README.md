@@ -1,5 +1,9 @@
 # LyricBar
 
+[![Latest release](https://img.shields.io/github/v/release/efeboy/lyricbar)](https://github.com/efeboy/lyricbar/releases/latest)
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)
+[![License: MIT](https://img.shields.io/github/license/efeboy/lyricbar)](LICENSE)
+
 A macOS menu bar app that shows time-synced lyrics for whatever **Spotify** or
 **Apple Music** is currently playing — one line at a time, right in the menu
 bar. No Dock icon, no window, no account.
