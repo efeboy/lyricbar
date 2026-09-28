@@ -11,13 +11,17 @@ bar. No Dock icon, no window, no account.
 1. Download the latest `LyricBar-x.y.dmg` from
    [Releases](https://github.com/efeboy/lyricbar/releases/latest).
 2. Open it and drag **LyricBar** into **Applications**.
-3. Launch LyricBar from Applications. A `♪` appears in the menu bar.
+3. Launch LyricBar from Applications. The first time, macOS asks
+   *"LyricBar is an app downloaded from the Internet. Are you sure you want to
+   open it?"* — choose **Open**. A `♪` appears in the menu bar.
 4. Play something in Spotify or Music. macOS asks once per app whether LyricBar
    may control it — choose **Allow**. That permission is how LyricBar reads what
    is playing; it never controls playback.
 
 Requires **macOS 14 Sonoma or later**, on Apple Silicon or Intel. The app is
-signed and notarized by Apple, so it opens without a security warning.
+signed and notarized by Apple, so the only prompt at first launch is that
+one-time "downloaded from the Internet" confirmation — never a "cannot be
+opened" block.
 
 ### Using it
 
