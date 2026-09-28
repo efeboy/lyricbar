@@ -1,0 +1,45 @@
+name: Bug report
+description: Something about LyricBar is not working
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you expected, what you saw instead, and any dialog macOS showed. Please don't paste lyrics — describe the problem instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: LyricBar version
+      description: Shown at the bottom of LyricBar's menu, e.g. "LyricBar 1.1".
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: Apple menu ▸ About This Mac, e.g. "macOS 15.3".
+    validations:
+      required: true
+  - type: dropdown
+    id: mac
+    attributes:
+      label: Mac
+      options:
+        - Apple Silicon (M1 or later)
+        - Intel
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: player
+    attributes:
+      label: Player
+      multiple: true
+      options:
+        - Spotify
+        - Apple Music
+    validations:
+      required: true
