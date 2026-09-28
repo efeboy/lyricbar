@@ -172,7 +172,7 @@ extension StatusItemController: NSMenuDelegate {
             let row = NSMenuItem(title: band.title,
                                  action: #selector(selectWidth(_:)), keyEquivalent: "")
             row.target = self
-            row.representedObject = band.rawValue
+            row.representedObject = band
             row.state = model.widthPreference == band ? .on : .off
             submenu.addItem(row)
         }
@@ -189,8 +189,7 @@ extension StatusItemController: NSMenuDelegate {
     }
 
     @objc private func selectWidth(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let band = LyricWidth(rawValue: raw) else { return }
+        guard let band = sender.representedObject as? LyricWidth else { return }
         model.widthPreference = band
     }
 

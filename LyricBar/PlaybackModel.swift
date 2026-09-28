@@ -58,7 +58,7 @@ final class PlaybackModel {
     var loginEnabled: Bool {
         get { loginRegistered }
         set {
-            try? LoginItem.setEnabled(newValue)
+            LoginItem.setEnabled(newValue)
             loginRegistered = LoginItem.isEnabled
         }
     }

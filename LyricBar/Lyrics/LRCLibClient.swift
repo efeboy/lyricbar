@@ -20,7 +20,7 @@ protocol LyricsProvider: Sendable {
     func fetch(title: String, artist: String, album: String, duration: Double) async -> LyricsFetchResult
 }
 
-final class LRCLibClient: LyricsProvider {
+struct LRCLibClient: LyricsProvider {
 
     static let durationTolerance: Double = 5
 

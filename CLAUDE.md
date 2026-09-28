@@ -569,7 +569,7 @@ Because no test can prove this, verify by measurement:
 Width detection is the one subsystem no test can cover, so it is **permanently
 instrumented** with Apple's unified logging (`os.Logger`, `LyricBar/FitLog.swift`)
 — the mechanism Apple's documentation prescribes and which it explicitly prefers
-over `print`/`NSLog`. Three categories under subsystem `net.local.lyricbar`:
+over `print`/`NSLog`. Three width categories under subsystem `net.local.lyricbar`:
 
 - **`calibration`** — the whole `MenuBarFit.calibrate` lifecycle: `begin`,
   `floorSettled`, `optimisticBound`, one `probe#N` line per candidate carrying its
@@ -597,6 +597,14 @@ over `print`/`NSLog`. Three categories under subsystem `net.local.lyricbar`:
   `suppressed reason=cooldown`.
 - **`render`** — one line per status item render: `drew` at `.debug`, and
   `clipped` at `.error` when the drawn text is wider than the box it went into.
+
+A fourth category, **`login`**, is not part of the width detection and so is
+not a `FitLog` handle: `LoginItem` owns its own `Logger` and writes one `.error`
+line, `failed enabling=… code=… status=…`, when `SMAppService.register()` or
+`unregister()` throws. It used to be `try?`, which made a refused registration
+indistinguishable from a checkmark that simply did not stick. The menu still
+reads the real state back through `LoginItem.isEnabled` afterwards, so the UI
+never claims a registration that failed.
 
 Watch it with the app launched normally — no terminal-attached binary, no
 scaffold to delete afterwards:
