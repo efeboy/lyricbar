@@ -18,16 +18,4 @@ enum LyricText {
         }
         return max(floor, size)
     }
-
-    static func attributed(text: String, boxWidth: CGFloat) -> NSAttributedString {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byClipping
-
-        return NSAttributedString(string: text, attributes: [
-            .font: MenuBarMetrics.font(ofSize: fittedFontSize(for: text, boxWidth: boxWidth)),
-            .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: paragraph,
-        ])
-    }
 }

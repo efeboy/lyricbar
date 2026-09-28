@@ -1,24 +1,20 @@
 import AppKit
 import Observation
-import QuartzCore
+import SwiftUI
 
 @MainActor
 final class StatusItemController: NSObject {
 
-    private static let lineCrossfade: CFTimeInterval = 0.18
-    private static let stateFade: TimeInterval = 0.35
-    private static let crossfadeKey = "lyric"
-
     private let model: PlaybackModel
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
-
-    private var shownText: String?
-    private var shownOpacity: Double?
+    private let label: PassthroughHostingView<LyricLabel>
 
     init(model: PlaybackModel) {
         self.model = model
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.label = PassthroughHostingView(rootView: LyricLabel(
+            text: model.lineText, boxWidth: model.boxWidth, opacity: model.displayState.opacity))
         super.init()
 
         menu.delegate = self
@@ -26,8 +22,12 @@ final class StatusItemController: NSObject {
         statusItem.menu = menu
 
         if let button = statusItem.button {
-            button.wantsLayer = true
+            button.title = ""
             button.imagePosition = .noImage
+            label.sizingOptions = []
+            label.frame = button.bounds
+            label.autoresizingMask = [.width, .height]
+            button.addSubview(label)
         }
 
         render()
@@ -41,20 +41,10 @@ final class StatusItemController: NSObject {
 
         MenuBarFit.itemWindow = button.window
         statusItem.length = box
-
-        if let shownText, shownText != text {
-            let crossfade = CATransition()
-            crossfade.type = .fade
-            crossfade.duration = Self.lineCrossfade
-            button.layer?.add(crossfade, forKey: Self.crossfadeKey)
-        }
-        button.attributedTitle = LyricText.attributed(text: text, boxWidth: box)
+        label.rootView = LyricLabel(text: text, boxWidth: box, opacity: model.displayState.opacity)
         button.setAccessibilityLabel(text)
-        shownText = text
 
         logFit(text: text, box: box, window: button.window)
-
-        fade(button, to: model.displayState.opacity)
     }
 
     private func logFit(text: String, box: CGFloat, window: NSWindow?) {
@@ -93,20 +83,6 @@ final class StatusItemController: NSObject {
             probing=\(probing, privacy: .public) \
             \(FitLog.geometry(window?.frame), privacy: .public)
             """)
-    }
-
-    private func fade(_ button: NSStatusBarButton, to opacity: Double) {
-        defer { shownOpacity = opacity }
-        guard let shownOpacity else {
-            button.alphaValue = opacity
-            return
-        }
-        guard shownOpacity != opacity else { return }
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.stateFade
-            button.animator().alphaValue = opacity
-        }
     }
 
     private func observe() {

@@ -73,7 +73,7 @@ Login Items.
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-81 tests in 9 Swift Testing suites:
+79 tests in 9 Swift Testing suites:
 
 - **`LRCParserTests`** — the LRC grammar (fraction separators and digit counts,
   repeated chorus timestamps, CRLF payloads) and `index(at:)` boundaries.
@@ -90,10 +90,11 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
   dropped. It asserts inequalities, not exact splits, so it does not drift.
 - **`MenuBarBoxTests`** — what `LyricText` alone guarantees: the fitted font size
   stays inside `[minimumFontSize, baseFontSize]` for every state and every content
-  shape, a line too wide to shrink bottoms out at the floor, the paragraph style is
-  centered and `.byClipping` (never ellipsized), the drawn colour is a
-  full-strength `labelColor` (opacity lives on the view, not the text), and the
-  dimmed states rank below `.playing`. `holdsLyric` is asserted here as a
+  shape, a line too wide to shrink bottoms out at the floor, and the dimmed states
+  rank below `.playing`. Centering and clip-don't-ellipsize used to be asserted
+  here too, on the `NSAttributedString`; they now live in `LyricLabel`'s modifier
+  chain, which a test cannot inspect, and are verified live instead (see "The
+  lyric is a SwiftUI view"). `holdsLyric` is asserted here as a
   *content* question — which states may render a lyric — not a width one; the box
   is the same in every state. It does **not** assert that arbitrary text fits the box —
   nothing promises that, and asserting it here fails on raw unreflowed lines. The
@@ -183,16 +184,17 @@ Files under `LyricBar/`:
   `FitCoordinator`. `boxWidth` and `lineText` read the coordinator's
   `probeWidth`; observation reaches through the nested `@Observable`, so the
   controller's tracking of `model.boxWidth` still fires on every probe.
-- **`LyricText.swift`** — owns `fittedFontSize` and builds the centered
-  `NSAttributedString` the status item button displays.
+- **`LyricText.swift`** — owns `fittedFontSize`, the pure font-size backstop.
+- **`LyricLabel.swift`** — the SwiftUI view that draws the lyric inside the status
+  item button, and `PassthroughHostingView`, the `NSHostingView` that hosts it.
 - **`StatusItemController.swift`** — owns the `NSStatusItem`, sets `length` and the
-  button's `attributedTitle`, builds the menu on demand as its own
+  hosted `LyricLabel`'s `rootView`, builds the menu on demand as its own
   `NSMenuDelegate`, and pushes model changes to the item via
   `withObservationTracking`.
 - **`LyricBarApp.swift`** — the `App` entry point: a `Settings` scene to satisfy
   SwiftUI's need for one, an `NSApplicationDelegateAdaptor` that creates the
-  controller. It holds no views: the only SwiftUI left is the empty `Settings`
-  scene, which exists because `App` requires a `body`.
+  controller. The `Settings` scene is empty and exists only because `App`
+  requires a `body`; the one real SwiftUI view is `LyricLabel`.
 
 ### Source selection
 
@@ -259,8 +261,8 @@ of `LyricBar / Menu Bar Item` are the same width.
 Centering is what stops the *apparent* movement: left-aligned text starts at the
 same edge every line and ends somewhere new, so the block still reads as
 shifting. Centered, all lines share a midpoint. The states are told apart purely
-by `DisplayState.opacity`, applied to the button's `alphaValue` — see the
-animation section for why it lives there and not in the text's colour.
+by `DisplayState.opacity`, applied as `LyricLabel`'s `.opacity` — see the
+animation section for why it lives on the view and not in the text's colour.
 
 **This replaced a collapsing box, and the history is worth knowing before you
 reintroduce one.** The item used to shrink to a 32pt placeholder in `.idle`,
@@ -283,9 +285,11 @@ which `displayText` uses to fall back to `♪`. Do not reattach it to geometry.
 ### The width is SET directly, and the lyric is real text
 
 The item is an `NSStatusItem` created in `StatusItemController`. Its width is
-`statusItem.length`, assigned outright, and the lyric is the button's
-`attributedTitle` — real text, which stays crisp at any scale, follows the system
-appearance via `NSColor.labelColor`, and is what VoiceOver reads.
+`statusItem.length`, assigned outright, and the lyric is a SwiftUI `Text` in
+`LyricLabel` — real text, which stays crisp at any scale and follows the menu
+bar's appearance through `.foregroundStyle(.primary)`. VoiceOver reads the
+button's `setAccessibilityLabel(text)`; the SwiftUI view is
+`.accessibilityHidden(true)` so the lyric is not announced twice.
 
 **Measured: the system adds `systemItemPadding` (16pt) on top of `length`.** So
 `length` is the *content* width, not the on-screen footprint:
@@ -304,8 +308,10 @@ from a fit pinned at the 80pt floor, which means the probes ran and were all
 rejected. That distinction is the fastest way to tell a geometry bug from a
 settle/recover bug.
 
-Note `NSStatusItem.title` and `attributedTitle` are **deprecated**; the live path
-is `statusItem.button?.attributedTitle`, the inherited `NSButton` property.
+The button's own `title` is set to `""` once and never touched again; it would
+otherwise draw underneath the hosted view. (`NSStatusItem.title` and
+`attributedTitle` are deprecated anyway — the button properties were the live
+path while the lyric was an `attributedTitle`.)
 
 **Why this used to be an image.** Under `MenuBarExtra` there was no `length` to
 set — its entire public API is eight initializers, none of which expose the
@@ -327,48 +333,70 @@ width is pinned on a SwiftUI view and has nothing to do with what AppKit gives t
 status item. If you ever see `fittingSize` in a test here again, it is measuring
 the wrong thing.
 
-### The item animates, and only because it is a view now
+### The lyric is a SwiftUI view, hosted in the AppKit item
 
-Two animations, both Core Animation on the button's backing layer
-(`wantsLayer = true`), both measured on the live item before being written down:
+**Why hybrid and not `MenuBarExtra`.** `MenuBarExtra` still has no width API
+(checked against the SDK 27 docs), and the only way to get a fixed width out of
+it is the fixed-size-image workaround above, which was rejected again on
+2026-09-28 for the reasons that section gives. So the split is exact: AppKit
+owns the one thing only AppKit can do — `statusItem.length` and the item's
+window, which `MenuBarFit` measures — and SwiftUI draws everything inside it.
 
-- **Line changes crossfade.** A `CATransition` (`.fade`, `lineCrossfade` 0.18s) is
-  added to the layer immediately before `attributedTitle` is assigned — but **only
-  when the text actually changed**. Width-only renders must not crossfade, and
-  every calibration probe is one, so without that guard the item flickers through
-  the whole binary search.
-- **State changes fade the item.** `DisplayState.opacity` goes to
-  `button.animator().alphaValue` inside an `NSAnimationContext` of `stateFade`
-  (0.35s), again only when the value changed. The *first* render assigns
-  `alphaValue` directly, so the item does not fade up from nothing on launch.
+`StatusItemController` adds a `PassthroughHostingView<LyricLabel>` as a subview
+of `statusItem.button`, sized to the button's bounds with an autoresizing mask,
+and `render()` replaces its `rootView` with plain values (`text`, `boxWidth`,
+`opacity`). Three details there are load-bearing:
 
-**`DisplayState.opacity` is the view's alpha, not the text's colour.**
-`LyricText.attributed` always uses a full-strength `NSColor.labelColor`. Applying
-opacity in both places would multiply them (0.3 x 0.3 = 0.09), and `alphaValue` is
-the animatable one — `NSView.alphaValue` is documented as "the opacity value from
-the view's layer". That is the whole reason it moved.
+- **`hitTest` returns `nil`.** Otherwise the hosting view swallows the click and
+  the menu never opens. Clicks fall through to the button, and AppKit's
+  `statusItem.menu` handling is untouched.
+- **`sizingOptions = []`.** The hosting view creates no constraints from its
+  content, so the label can never push its own size back into the status item.
+  That is precisely the failure `MenuBarExtra` had — the item sizing itself to
+  the label — and the width must only ever come from `length`.
+- **Plain values, not the model.** `LyricLabel` takes three values, the same
+  reason `displayText` is static: `render()` stays the only place the model and
+  the drawing meet, and it is still the place `logFit` measures.
 
-Measured on the live item, because none of it is testable:
+Inside `LyricLabel`:
 
-```
-wantsLayer = true            ->  NSViewBackingLayer
-animator().alphaValue = 0.15 over 1.5s
-  model.opacity     0.150 immediately
-  presentation      0.712 -> 0.435 -> 0.275 -> 0.179 -> 0.152
-CAGradientLayer assigned to layer.mask survives an attributedTitle change,
-  with layer identity unchanged across it
-```
+- **The text is `.fixedSize()` inside `.frame(width: boxWidth).clipped()`.** Do
+  **not** replace this with `.lineLimit(1)`: SwiftUI truncates a single line with
+  "…", which breaks "Lyrics must never be truncated". `fixedSize` lets an
+  overflowing line keep its natural width; the frame centres it and `clipped`
+  cuts it, which is what `.byClipping` did for the attributed string.
+- **Line changes crossfade** through `.id(text)` + `.transition(.opacity)` under
+  an `.animation(.easeInOut(duration: lineCrossfade), value: text)` (0.18s).
+  Keying the animation on `text` is what gives width-only renders — every
+  calibration probe — no crossfade, which the AppKit version needed an explicit
+  `shownText` guard for.
+- **State changes fade** through `.opacity(opacity)` under an animation keyed on
+  `opacity` (`stateFade`, 0.35s). SwiftUI does not animate the first render, so
+  the item still does not fade up from nothing at launch.
+- **Both animation modifiers sit *inside* the `.frame(width:)`.** An
+  `.animation` modifier only animates the modifiers above it in the chain, so the
+  box width is never animated. That matters at the end of a calibration, where
+  the width (probe → fitted) and the text (`♪` → lyric) change in the same
+  render: with the frame inside the animation, the label would visibly resize for
+  0.18s while `statusItem.length` had already snapped.
 
-That last line is what matters for anything further: **AppKit does not rebuild the
-backing layer when the title changes**, so a mask survives every lyric update. A
-karaoke-style sweep is therefore a `CAGradientLayer` mask with animated
-`locations` — GPU work, no per-frame text rebuild. Its `frame` would need resetting
-in `render()` whenever `statusItem.length` changes, since a mask does not track its
-host.
+**`DisplayState.opacity` is the view's opacity, not the text's colour.** The text
+is always full-strength `.primary`. Applying opacity in both places would
+multiply them (0.3 x 0.3 = 0.09).
 
-`attributedTitle` itself is **not** animatable; there is no interpolation between
-two strings. Every text change is a discrete swap, and the crossfade animates the
-rendered result *around* it rather than through it.
+Verified on the live item when this landed (2026-09-28), because none of it is
+testable: same window geometry as the AppKit label (269pt at `minX=980` on the
+reference display, box 253); crisp, centred text in the menu bar font; clicks
+open the menu through the hosting view; the standard rounded highlight appears
+behind the item while the menu is open with the lyric still legible over it;
+lines crossfade and pause/resume fades without jumps; the text turns dark on a
+light menu bar; and a stream of renders across playing, instrumental, loading
+and idle logged no `clipped` line.
+
+**A karaoke-style sweep**, if it is ever wanted, is now a SwiftUI `.mask` with an
+animated `LinearGradient` on the `Text` — not the `CAGradientLayer` on the
+button's backing layer this section used to describe, which assumed the lyric
+was the button's own title.
 
 ### There is no icon
 
@@ -385,7 +413,7 @@ assignments across the tick branches is what it replaced.
 
 That decision is `PlaybackModel.displayText(chunk:probing:state:)`, a **static
 function over plain values** so tests can drive every combination — the same reason
-`LyricText.attributed` does not take the model. It returns the placeholder unless
+`LyricLabel` does not take the model. It returns the placeholder unless
 all three hold: not probing, the state `holdsLyric`, and the chunk is non-empty.
 
 **The `probing:` argument is not politeness, it is a shipped bug.** `boxWidth` is
@@ -393,7 +421,7 @@ all three hold: not probing, the state `holdsLyric`, and the chunk is non-empty.
 as little as the 80pt floor — while `menuLines`
 is still reflowed for the old budget, because `applyFittedWidth()` only rebuilds it
 *after* calibration finishes. Render a lyric in that window and `fittedFontSize`
-bottoms out at 9pt, the text still overflows, and `.byClipping` clips it mid-word.
+bottoms out at 9pt, the text still overflows, and the label's clip cuts it mid-word.
 Observed live as `Somewher` in a ~40pt item, when FaceTime added a status item
 mid-song and the drift watchdog recalibrated underneath the lyric.
 
@@ -417,9 +445,9 @@ drift-triggered run measured after the box was unified walks
 check that counts clips is the only way to see this — no test can, because the
 probe sequence needs a real menu bar.
 
-`LyricText.attributed` takes plain values, not the model — that is what lets a
-test drive every state. Keep it that way: `StatusItemController.render` is the
-only place the two are joined.
+`LyricLabel` and `LyricText.fittedFontSize` take plain values, not the model —
+that is what lets a test drive every state. Keep it that way:
+`StatusItemController.render` is the only place the two are joined.
 
 ### The width is MEASURED, not guessed (`MenuBarFit`)
 
@@ -689,7 +717,7 @@ Two shapes elsewhere exist only to feed these lines: `DisplayState` carries a
 keeps its signature.
 
 The cost is a measurement per render (`fittedFontSize` plus one `textWidth`) that
-duplicates work `LyricText.attributed` already does. Renders are line changes,
+duplicates work `LyricLabel` already does when it picks its font. Renders are line changes,
 not a hot loop, and `.debug` records are dropped unless something is streaming —
 but if a future change makes `render()` fire per frame, gate `logFit` first.
 
@@ -845,8 +873,16 @@ the shape is still what keeps persistence out of the call sites. Do not
 
 `statusItem.menu = menu` — AppKit shows it on click, highlights the button while
 it is open, and dismisses it. There is no `togglePopover`, no `NSApp.activate()`,
-no `NSHostingController`, and no view code at all outside the empty `Settings`
-scene.
+and no `NSHostingController`; the only view code is `LyricLabel`, which draws the
+lyric and never receives a click.
+
+**The menu stays AppKit on purpose.** It is the native control for a status
+item's menu, and its SwiftUI equivalent is `MenuBarExtra(.menu)`, which the width
+rules out. Moving Width and Open at Login into a SwiftUI `Settings` window
+instead would need either the private `showSettingsWindow:` selector (an
+`LSUIElement` app has no SwiftUI environment in an `NSMenu` action to call
+`openSettings` from) or a hand-built window — a heavier, less native surface for
+two settings.
 
 **The popover was deleted because it was mostly empty.** It rendered
 `trackTitle` / `trackArtist` / `trackSubtitle` and the previous/current/next

@@ -9,11 +9,6 @@ struct MenuBarBoxTests {
 
     private static let box: CGFloat = 280
 
-    private func drawnWidth(_ text: String,
-                            box: CGFloat = MenuBarBoxTests.box) -> CGFloat {
-        LyricText.attributed(text: text, boxWidth: box).size().width
-    }
-
     private static let states: [(name: String, text: String, state: PlaybackModel.DisplayState)] = [
         ("playing/long",  "Was the sky so grey at dawn that the rain would find its way?", .playing),
         ("playing/short", "Girl", .playing),
@@ -50,16 +45,6 @@ struct MenuBarBoxTests {
         #expect(PlaybackModel.DisplayState.playing.holdsLyric)
     }
 
-    @Test("The lyric is centered, and clipped rather than ellipsized")
-    func centeredAndNeverEllipsized() throws {
-        let drawn = LyricText.attributed(text: "Girl", boxWidth: Self.box)
-        let paragraph = try #require(
-            drawn.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
-
-        #expect(paragraph.alignment == .center)
-        #expect(paragraph.lineBreakMode == .byClipping)
-    }
-
     @Test("A line far too wide to shrink into the box bottoms out at the floor")
     func overflowBottomsOutAtTheFloor() {
         let huge = String(repeating: "Wonderwall ", count: 40)
@@ -80,15 +65,6 @@ struct MenuBarBoxTests {
 
         #expect(size >= MenuBarMetrics.minimumFontSize)
         #expect(size <= MenuBarMetrics.baseFontSize)
-    }
-
-    @Test("Opacity belongs to the view, not the text, so it can animate")
-    func opacityIsNotBakedIntoTheText() throws {
-        let drawn = LyricText.attributed(text: "Girl", boxWidth: Self.box)
-        let colour = try #require(
-            drawn.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
-
-        #expect(colour == NSColor.labelColor)
     }
 
     @Test("Dimmed states rank below playing, which stays full strength")
