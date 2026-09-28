@@ -62,9 +62,9 @@ enum LyricWidth: String, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .compact:  "Compact"
-        case .standard: "Standard"
-        case .fill:     "Fit Menu Bar"
+        case .compact:  String(localized: "Compact")
+        case .standard: String(localized: "Standard")
+        case .fill:     String(localized: "Fit Menu Bar")
         }
     }
 }

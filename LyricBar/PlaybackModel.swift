@@ -114,14 +114,14 @@ final class PlaybackModel {
 
     private static let gapPlaceholder = "♪"
     private static let deniedPlaceholder = "⚠\u{FE0E}"
-    private static let startingHeader = "Starting…"
-    private static let idleTitle = "Nothing playing"
-    private static let hiddenHeader = "Lyrics hidden"
-    private static let loadingHeader = "Loading lyrics…"
-    private static let noLyricsHeader = "No synced lyrics found"
-    private static let deniedTitle = "Automation access denied"
-    private static let deniedDetail = "LyricBar cannot read Spotify or Music"
-    private static let deniedHint = "Privacy & Security → Automation"
+    private static let startingHeader = String(localized: "Starting…")
+    private static let idleTitle = String(localized: "Nothing playing")
+    private static let hiddenHeader = String(localized: "Lyrics hidden")
+    private static let loadingHeader = String(localized: "Loading lyrics…")
+    private static let noLyricsHeader = String(localized: "No synced lyrics found")
+    private static let deniedTitle = String(localized: "Automation access denied")
+    private static let deniedDetail = String(localized: "LyricBar cannot read Spotify or Music")
+    private static let deniedHint = String(localized: "Privacy & Security → Automation")
     private static let tickInterval: Double = 0.5
     private static let metadataInterval: Double = 1
 

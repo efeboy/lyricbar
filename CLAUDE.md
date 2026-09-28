@@ -944,6 +944,16 @@ Tuning lives near its use (`PlaybackModel.tickInterval`, the `LyricWidth` bands,
 and its timeouts, `LyricReflow.minChunkDuration`). Prefer a named constant over a
 literal, since a name is the only explanation the source is allowed to carry.
 
+Every user-facing string is `String(localized:)`, and `LyricBar/Localizable.xcstrings`
+is the catalog. It is English-only for now; the point is that adding a language
+is a translation job, not a code change. **Building in Xcode keeps the catalog in
+sync — `xcodebuild` does not.** A new string built only from the command line
+compiles and shows in English, but never reaches the catalog, so build once in
+the IDE before committing a new string. The `"\(title) — \(artist)"` header is
+deliberately not localized: it is two proper nouns and a dash. The tests compare
+against the English strings, which holds because the test host runs in the
+development language.
+
 Never print lyric text to logs, stdout, or the menu header; the header shows track
 and artist only. Diagnostics — including test failure messages — report timing
 structure, counts, and geometry, not content.

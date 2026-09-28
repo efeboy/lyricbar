@@ -135,12 +135,12 @@ extension StatusItemController: NSMenuDelegate {
         menu.addItem(status)
         menu.addItem(.separator())
 
-        let hide = NSMenuItem(title: model.isHidden ? "Show Lyrics" : "Hide Lyrics",
+        let hide = NSMenuItem(title: model.isHidden ? String(localized: "Show Lyrics") : String(localized: "Hide Lyrics"),
                               action: #selector(toggleHidden), keyEquivalent: "p")
         hide.target = self
         menu.addItem(hide)
 
-        let login = NSMenuItem(title: "Open at Login",
+        let login = NSMenuItem(title: String(localized: "Open at Login"),
                                action: #selector(toggleLogin), keyEquivalent: "")
         login.target = self
         login.state = model.loginEnabled ? .on : .off
@@ -150,7 +150,7 @@ extension StatusItemController: NSMenuDelegate {
         menu.addItem(widthItem())
 
         if model.displayState == .denied {
-            let automation = NSMenuItem(title: "Open Automation Settings…",
+            let automation = NSMenuItem(title: String(localized: "Open Automation Settings…"),
                                         action: #selector(openAutomation), keyEquivalent: "")
             automation.target = self
             menu.addItem(automation)
@@ -158,14 +158,14 @@ extension StatusItemController: NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "Quit LyricBar",
+        let quit = NSMenuItem(title: String(localized: "Quit LyricBar"),
                               action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
         menu.addItem(quit)
     }
 
     private func widthItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "Width", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: String(localized: "Width"), action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         submenu.autoenablesItems = false
         for band in LyricWidth.allCases {
