@@ -8,7 +8,7 @@ final class PlaybackModel {
 
     var lineText: String {
         PlaybackModel.displayText(chunk: chunk,
-                                  probing: probeWidth != nil,
+                                  probing: fit.probeWidth != nil,
                                   state: displayState)
     }
 
@@ -29,12 +29,12 @@ final class PlaybackModel {
     private(set) var nextLine = ""
 
     var boxWidth: CGFloat {
-        probeWidth ?? lyricBoxWidth
+        fit.probeWidth ?? lyricBoxWidth
     }
 
+    var fittedWidth: CGFloat { fit.fittedWidth }
+
     private(set) var lyricBoxWidth: CGFloat
-    private(set) var fittedWidth: CGFloat
-    private var probeWidth: CGFloat?
 
     var widthPreference: LyricWidth {
         get { storedWidth }
@@ -93,6 +93,7 @@ final class PlaybackModel {
     @ObservationIgnored private let clock = ContinuousClock()
     @ObservationIgnored private let bridges: [PlaybackBridge]
     @ObservationIgnored private let lyrics: any LyricsProvider
+    @ObservationIgnored private let fit: FitCoordinator
 
     @ObservationIgnored private var activeBridge: PlaybackBridge?
     @ObservationIgnored private var lines: [LyricLine] = []
@@ -108,15 +109,8 @@ final class PlaybackModel {
     @ObservationIgnored private var positionSample: (position: Double, at: ContinuousClock.Instant)?
     @ObservationIgnored private var lastMetadataProbe: ContinuousClock.Instant?
 
-    @ObservationIgnored private var expectedRightEdge: CGFloat?
-    @ObservationIgnored private var lastCalibration: ContinuousClock.Instant?
-    @ObservationIgnored private var driftedProbes = 0
-    @ObservationIgnored private var isCalibrating = false
-
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
-    @ObservationIgnored private var fitTask: Task<Void, Never>?
-    @ObservationIgnored private var screenTask: Task<Void, Never>?
 
     private static let gapPlaceholder = "♪"
     private static let deniedPlaceholder = "⚠\u{FE0E}"
@@ -130,9 +124,6 @@ final class PlaybackModel {
     private static let deniedHint = "Privacy & Security → Automation"
     private static let tickInterval: Double = 0.5
     private static let metadataInterval: Double = 1
-    private static let recalibrationCooldown: Double = 30
-    private static let driftProbesBeforeRecalibration = 2
-    private static let driftTolerance = MenuBarFit.probeResolution
 
     private enum Keys {
         static let width = "lyricWidth"
@@ -146,19 +137,18 @@ final class PlaybackModel {
         self.lyrics = lyrics
 
         let width = LyricWidth(rawValue: defaults.string(forKey: Keys.width) ?? "") ?? .fill
-        let cached = MenuBarFit.cachedFit(for: MenuBarFit.signature(), in: defaults)
-        let fitted = cached?.boxWidth ?? MenuBarMetrics.minimumBoxWidth
+        let fit = FitCoordinator(defaults: defaults)
 
+        self.fit = fit
         storedWidth = width
-        fittedWidth = fitted
-        lyricBoxWidth = MenuBarMetrics.boxWidth(width, fittedWidth: fitted)
-        expectedRightEdge = cached?.rightEdge
+        lyricBoxWidth = MenuBarMetrics.boxWidth(width, fittedWidth: fit.fittedWidth)
+        fit.onRefit = { [weak self] refit in self?.handleRefit(refit) }
 
         guard !Self.isRunningTests else { return }
-        observeScreenChanges()
+        fit.observeScreenChanges()
         startPolling()
 
-        if let cached {
+        if let cached = fit.launchFit {
             FitLog.calibration.notice("""
                 cacheHit signature=\(MenuBarFit.signature(), privacy: .public) \
                 box=\(FitLog.points(cached.boxWidth), privacy: .public) \
@@ -171,7 +161,7 @@ final class PlaybackModel {
                 cacheMiss signature=\(MenuBarFit.signature(), privacy: .public) \
                 preference=\(width.rawValue, privacy: .public)
                 """)
-            calibrate(reason: "launch-no-cache")
+            fit.calibrate(reason: .launchNoCache)
         }
     }
 
@@ -211,141 +201,23 @@ final class PlaybackModel {
         shownMenuLine = nil
     }
 
-    private func calibrate(reason: String) {
-        FitLog.calibration.notice("""
-            requested reason=\(reason, privacy: .public) \
-            wasCalibrating=\(self.isCalibrating, privacy: .public) \
-            fittedWidth=\(FitLog.points(self.fittedWidth), privacy: .public)
-            """)
-        fitTask?.cancel()
-        fitTask = Task { [weak self] in
-            guard let self else { return }
-            self.isCalibrating = true
-            defer {
-                self.isCalibrating = false
-                self.probeWidth = nil
-            }
-
-            let fit = await MenuBarFit.calibrate(
-                upperBound: MenuBarMetrics.widestBox(),
-                leftLimit: MenuBarMetrics.statusStripLeftEdge()
-            ) { [weak self] candidate in
-                self?.probeWidth = candidate
-            }
-
-            guard !Task.isCancelled else {
-                FitLog.calibration.notice("cancelled reason=\(reason, privacy: .public)")
-                return
-            }
-            if let fit {
-                MenuBarFit.store(fit, for: MenuBarFit.signature(), in: self.defaults)
-                FitLog.calibration.notice("""
-                    stored signature=\(MenuBarFit.signature(), privacy: .public) \
-                    box=\(FitLog.points(fit.boxWidth), privacy: .public) \
-                    rightEdge=\(FitLog.points(fit.rightEdge), privacy: .public)
-                    """)
-                self.fittedWidth = fit.boxWidth
-                self.expectedRightEdge = fit.rightEdge
-                self.lastCalibration = self.clock.now
-            } else {
-                FitLog.calibration.error("""
-                    noFit reason=\(reason, privacy: .public) \
-                    keeping=\(FitLog.points(self.fittedWidth), privacy: .public) \
-                    nothingWrittenToDefaults=true
-                    """)
-            }
-            self.applyFittedWidth()
+    private func handleRefit(_ refit: FitCoordinator.Refit) {
+        applyFittedWidth()
+        switch refit {
+        case .calibrated(let reason):
             FitLog.calibration.notice("""
-                applied reason=\(reason, privacy: .public) \
+                applied reason=\(reason.rawValue, privacy: .public) \
                 fittedWidth=\(FitLog.points(self.fittedWidth), privacy: .public) \
                 preference=\(self.storedWidth.rawValue, privacy: .public) \
                 lyricBox=\(FitLog.points(self.lyricBoxWidth), privacy: .public) \
                 menuLines=\(self.menuLines.count, privacy: .public)
                 """)
-        }
-    }
-
-    private func checkFitDrift(now: ContinuousClock.Instant) {
-        guard !isCalibrating, probeWidth == nil,
-              let expected = expectedRightEdge,
-              let frame = MenuBarFit.itemFrame else { return }
-
-        let drift = frame.maxX - expected
-        guard abs(drift) > Self.driftTolerance else {
-            if driftedProbes > 0 {
-                FitLog.drift.info("""
-                    settled drift=\(FitLog.points(drift), privacy: .public) \
-                    tolerance=\(FitLog.points(Self.driftTolerance), privacy: .public) \
-                    discardedProbes=\(self.driftedProbes, privacy: .public)
-                    """)
-            }
-            driftedProbes = 0
-            return
-        }
-        driftedProbes += 1
-        FitLog.drift.notice("""
-            observed drift=\(FitLog.points(drift), privacy: .public) \
-            direction=\(drift < 0 ? "squeezed" : "freed", privacy: .public) \
-            expectedRightEdge=\(FitLog.points(expected), privacy: .public) \
-            \(FitLog.geometry(frame), privacy: .public) \
-            probe=\(self.driftedProbes, privacy: .public)/\(Self.driftProbesBeforeRecalibration, privacy: .public)
-            """)
-        guard driftedProbes >= Self.driftProbesBeforeRecalibration else { return }
-        driftedProbes = 0
-        MenuBarFit.invalidate(MenuBarFit.signature(), in: defaults)
-        FitLog.drift.notice("""
-            invalidated signature=\(MenuBarFit.signature(), privacy: .public) \
-            drift=\(FitLog.points(drift), privacy: .public)
-            """)
-
-        guard drift < 0 else {
-            expectedRightEdge = frame.maxX
-            FitLog.drift.notice("""
-                roomFreed drift=\(FitLog.points(drift), privacy: .public) \
-                newRightEdge=\(FitLog.points(frame.maxX), privacy: .public) \
-                recalibrating=false pickedUpOnNextLaunch=true
+        case .restoredFromCache:
+            FitLog.calibration.notice("""
+                screenChangeCacheHit \
+                box=\(FitLog.points(self.fittedWidth), privacy: .public) \
+                lyricBox=\(FitLog.points(self.lyricBoxWidth), privacy: .public)
                 """)
-            return
-        }
-        if let last = lastCalibration {
-            let sinceLast = last.duration(to: now).seconds
-            if sinceLast < Self.recalibrationCooldown {
-                FitLog.drift.notice("""
-                    suppressed reason=cooldown \
-                    sinceLastCalibration=\(Int(sinceLast), privacy: .public)s \
-                    cooldown=\(Int(Self.recalibrationCooldown), privacy: .public)s
-                    """)
-                return
-            }
-        }
-        calibrate(reason: "drift-squeezed")
-    }
-
-    private func observeScreenChanges() {
-        screenTask = Task { [weak self] in
-            let changes = NotificationCenter.default
-                .notifications(named: NSApplication.didChangeScreenParametersNotification)
-                .map { _ in () }
-            for await _ in changes {
-                guard let self else { return }
-                FitLog.calibration.notice("""
-                    screenChange signature=\(MenuBarFit.signature(), privacy: .public) \
-                    screens=\(NSScreen.screens.count, privacy: .public) \
-                    widestBox=\(FitLog.points(MenuBarMetrics.widestBox()), privacy: .public)
-                    """)
-                if let cached = MenuBarFit.cachedFit(for: MenuBarFit.signature(), in: self.defaults) {
-                    self.fittedWidth = cached.boxWidth
-                    self.expectedRightEdge = cached.rightEdge
-                    self.applyFittedWidth()
-                    FitLog.calibration.notice("""
-                        screenChangeCacheHit \
-                        box=\(FitLog.points(cached.boxWidth), privacy: .public) \
-                        lyricBox=\(FitLog.points(self.lyricBoxWidth), privacy: .public)
-                        """)
-                } else {
-                    self.calibrate(reason: "screen-change")
-                }
-            }
         }
     }
 
@@ -372,7 +244,7 @@ final class PlaybackModel {
 
         if probeMetadata {
             lastMetadataProbe = started
-            checkFitDrift(now: started)
+            fit.checkDrift()
             let probe = await probeSources()
             guard !hidden else { return }
             automationDenied = probe.denied && probe.active == nil
@@ -586,11 +458,5 @@ final class PlaybackModel {
                 }
             }
         }
-    }
-}
-
-private extension Duration {
-    var seconds: Double {
-        Double(components.seconds) + Double(components.attoseconds) * 1e-18
     }
 }

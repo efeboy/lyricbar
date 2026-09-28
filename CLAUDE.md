@@ -163,8 +163,20 @@ Files under `LyricBar/`:
 - **`Lyrics/LRCLibClient.swift`** — `LRCLibClient` (`Sendable`, runs off the main
   actor).
 - **`LoginItem.swift`** — thin `SMAppService.mainApp` wrapper for the login toggle.
+- **`FitCoordinator.swift`** — `@MainActor @Observable`; drives `MenuBarFit` over
+  the app's lifetime: the calibration task and its `probeWidth`, the drift
+  watchdog, the screen-change observer, and the `fittedWidth` they produce.
+  `MenuBarFit` answers "how wide can the item be right now"; the coordinator
+  decides *when* to ask. It knows nothing about lyrics or the width preference:
+  it reports each refit through `onRefit`, and `PlaybackModel.handleRefit`
+  reapplies the band, rebuilds `menuLines`, and logs the model-side fields
+  (`preference`, `lyricBox`, `menuLines`) on the `applied` and
+  `screenChangeCacheHit` lines.
 - **`PlaybackModel.swift`** — `@MainActor @Observable`; owns the poll loop, source
-  selection, position extrapolation, the per-track fetch task, and the fit.
+  selection, position extrapolation, the per-track fetch task, and a
+  `FitCoordinator`. `boxWidth` and `lineText` read the coordinator's
+  `probeWidth`; observation reaches through the nested `@Observable`, so the
+  controller's tracking of `model.boxWidth` still fires on every probe.
 - **`LyricText.swift`** — owns `fittedFontSize` and builds the centered
   `NSAttributedString` the status item button displays.
 - **`StatusItemController.swift`** — owns the `NSStatusItem`, sets `length` and the
@@ -497,7 +509,8 @@ old hard-coded `otherItemsReserve: 200` produced. That constant was wrong by
 ~300pt, which is why the item looked like it had vanished: it was a mostly-empty
 556pt box with a faint 30%-opacity `♪` centred in it.
 
-A **drift watchdog** in the metadata tick re-reads the frame; if `maxX` has left
+A **drift watchdog** (`FitCoordinator.checkDrift`, called from the metadata
+tick) re-reads the frame; if `maxX` has left
 `expectedRightEdge` by more than `driftTolerance` for two consecutive probes
 (another app added or removed a status item), it invalidates the cache and
 recalibrates. This is observed behaviour, not theory: a relaunch found the right
@@ -556,16 +569,23 @@ over `print`/`NSLog`. Three categories under subsystem `net.local.lyricbar`:
   `floorSettled`, `optimisticBound`, one `probe#N` line per candidate carrying its
   verdict and the frame it was judged on, `recover`, `converged`. Around it,
   `cacheHit`/`cacheMiss` at launch, `stored` on the defaults key, and
-  `requested`/`applied`/`noFit` from `PlaybackModel.calibrate(reason:)` — where
-  `reason` is `launch-no-cache`, `drift-squeezed` or `screen-change`.
+  `requested`/`noFit` from `FitCoordinator.calibrate(reason:)` and `applied`
+  from `PlaybackModel.handleRefit` — where `reason` is a
+  `FitCoordinator.Reason` raw value: `launch-no-cache`, `drift-squeezed` or
+  `screen-change`.
 
-  **The `stored`/`invalidated` lines live at the `PlaybackModel` call sites, not
+  **The `stored`/`invalidated` lines live at the `FitCoordinator` call sites, not
   inside `MenuBarFit.store`/`invalidate`.** Those two are pure cache functions
   that `MenuBarFitTests` drives directly with synthetic values, so logging inside
   them put lines like `stored box=4 rightEdge=1250` into the real unified log on
   every `xcodebuild test` — indistinguishable, during a later investigation, from
-  the fit having collapsed. `PlaybackModel` is the layer with the
-  `isRunningTests` guard, so that is where anything user-visible must be logged.
+  the fit having collapsed. The coordinator's `calibrate` and screen observer
+  are never started under `isRunningTests`, and `checkDrift` — which
+  `PlaybackModelTests` does reach, through `tick()` — returns before logging
+  anything because no status item exists under test, so `MenuBarFit.itemFrame`
+  is nil. That is why the coordinator is where anything user-visible must be
+  logged. Keep it that way: if a test ever drives the coordinator with a real
+  frame, those lines will leak into the unified log again.
 - **`drift`** — the watchdog: `observed` (with direction and the probe count
   toward `driftProbesBeforeRecalibration`), `settled`, `roomFreed`, and
   `suppressed reason=cooldown`.
