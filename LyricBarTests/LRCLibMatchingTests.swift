@@ -29,12 +29,14 @@ struct LRCLibMatchingTests {
         #expect(LRCLibClient.bestMatch(among: results, duration: 180) == nil)
     }
 
-    @Test("The tolerance boundary is inclusive", arguments: [
+    private static let boundaryCases: [(Double, Bool)] = [
         (180.0 + LRCLibClient.durationTolerance, true),
         (180.0 - LRCLibClient.durationTolerance, true),
         (180.0 + LRCLibClient.durationTolerance + 0.01, false),
         (180.0 - LRCLibClient.durationTolerance - 0.01, false),
-    ])
+    ]
+
+    @Test("The tolerance boundary is inclusive", arguments: boundaryCases)
     func toleranceBoundary(candidateDuration: Double, accepted: Bool) {
         let match = LRCLibClient.bestMatch(among: [track(duration: candidateDuration)],
                                            duration: 180)
