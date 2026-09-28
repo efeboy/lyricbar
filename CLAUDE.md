@@ -30,7 +30,8 @@ Do not reintroduce comments — not even `// MARK:` dividers.
 no `swift build` step and no `launchctl` deploy dance.
 
 **To get a change into the app the user actually runs, use the `ship` skill**
-(`.claude/skills/ship/SKILL.md`), which drives `Scripts/dist.sh` and then
+(`.claude/skills/ship/SKILL.md` — local to the maintainer's machine and
+git-ignored, so it is absent from a fresh clone), which drives `Scripts/dist.sh` and then
 verifies the install. The one rule worth repeating here: **never `ditto` an
 `xcodebuild build` output into `/Applications`.** It is signed `Apple
 Development`, keeps `get-task-allow`, is single-architecture, and `spctl`

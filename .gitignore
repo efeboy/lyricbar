@@ -26,3 +26,6 @@ Packages/
 
 # Distribution output (Scripts/dist.sh)
 dist/
+
+# Local Claude Code skills and settings (kept on disk, not published)
+.claude/
