@@ -398,6 +398,7 @@ final class PlaybackModel {
 
         guard snapshot.state == .playing else {
             positionSample = nil
+            shownMenuIndex = -1
             displayState = .paused
             return
         }

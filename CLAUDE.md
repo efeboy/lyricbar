@@ -73,7 +73,7 @@ Login Items.
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-80 tests in 9 Swift Testing suites:
+81 tests in 9 Swift Testing suites:
 
 - **`LRCParserTests`** — the LRC grammar (fraction separators and digit counts,
   repeated chorus timestamps, CRLF payloads) and `index(at:)` boundaries.
@@ -101,7 +101,7 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 - **`MenuBarFitTests`** — the pure half of the fit calibration:
   `crowdsNeighbours`, `optimisticBound`, the cache round-trip, and signatures.
 - **`PlaybackModelTests`** — the tick logic, driven through injected fakes: track
-  changes, the loading window, instrumental intros, hide/show, Spotify winning
+  changes, the loading window, instrumental intros, resuming mid-line, hide/show, Spotify winning
   ties, and Automation denial. `refreshNow()` forces a full metadata probe and
   `awaitPendingLyrics()` waits on the per-track fetch, so every case is
   deterministic without a clock or the network.

@@ -182,6 +182,30 @@ struct PlaybackModelTests {
         #expect(model.boxWidth == model.lyricBoxWidth)
     }
 
+    @Test("Resuming mid-line shows the lyric again without waiting for the next line")
+    func resumeMidLineRedraws() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        spotify.positionValue = 25
+        await model.refreshNow()
+        await model.awaitPendingLyrics()
+        await model.refreshNow()
+        try? #require(model.lineText == "second")
+
+        spotify.next = track("s1", state: .paused)
+        await model.refreshNow()
+        #expect(model.displayState == .paused)
+
+        spotify.next = track("s1")
+        spotify.positionValue = 26
+        await model.refreshNow()
+
+        #expect(model.displayState == .playing)
+        #expect(model.lineText == "second")
+    }
+
     @Test("Hiding lyrics freezes the item and restores the header when shown again")
     func hideAndShow() async {
         let spotify = FakeBridge(source: .spotify)
