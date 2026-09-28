@@ -143,8 +143,9 @@ final class PlaybackModel {
         storedWidth = width
         lyricBoxWidth = MenuBarMetrics.boxWidth(width, fittedWidth: fit.fittedWidth)
         fit.onRefit = { [weak self] refit in self?.handleRefit(refit) }
+    }
 
-        guard !Self.isRunningTests else { return }
+    func start() {
         fit.observeScreenChanges()
         startPolling()
 
@@ -154,20 +155,15 @@ final class PlaybackModel {
                 box=\(FitLog.points(cached.boxWidth), privacy: .public) \
                 rightEdge=\(FitLog.points(cached.rightEdge), privacy: .public) \
                 lyricBox=\(FitLog.points(self.lyricBoxWidth), privacy: .public) \
-                preference=\(width.rawValue, privacy: .public)
+                preference=\(self.storedWidth.rawValue, privacy: .public)
                 """)
         } else {
             FitLog.calibration.notice("""
                 cacheMiss signature=\(MenuBarFit.signature(), privacy: .public) \
-                preference=\(width.rawValue, privacy: .public)
+                preference=\(self.storedWidth.rawValue, privacy: .public)
                 """)
             fit.calibrate(reason: .launchNoCache)
         }
-    }
-
-    static var isRunningTests: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || NSClassFromString("XCTestCase") != nil
     }
 
     func refreshNow() async {

@@ -107,11 +107,17 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
   deterministic without a clock or the network.
 
 It is a **hosted** bundle (`TEST_HOST` is the app), so `test` launches LyricBar.
-`PlaybackModel.isRunningTests` detects that and skips the poll loop, the screen
-observer, and the fit calibration — otherwise tests would prompt for Automation,
-depend on whatever happens to be playing, and resize the real menu bar item. If
-you ever add tests that need the loop running, drive it explicitly rather than
-removing that guard.
+`AppDelegate.isRunningTests` detects that and creates neither the model nor the
+status item — otherwise tests would prompt for Automation, depend on whatever
+happens to be playing, and resize the real menu bar item.
+
+The model itself has **no test awareness**. `PlaybackModel.init` only assigns
+state; the poll loop, the screen observer and the launch calibration begin in
+`start()`, which `AppDelegate` calls *after* creating the `StatusItemController`,
+so the calibration's first read of `MenuBarFit.itemWindow` finds a real item.
+Tests construct a model and never call `start()`. If you ever add tests that
+need the loop running, drive it explicitly (`refreshNow()`) rather than calling
+`start()` — that would reach the real bridges.
 
 **A test in this repo cannot prove the menu bar item is correct.** It can only
 prove the image is the size we think. A clean build proves nothing about whether
@@ -580,7 +586,7 @@ over `print`/`NSLog`. Three categories under subsystem `net.local.lyricbar`:
   them put lines like `stored box=4 rightEdge=1250` into the real unified log on
   every `xcodebuild test` — indistinguishable, during a later investigation, from
   the fit having collapsed. The coordinator's `calibrate` and screen observer
-  are never started under `isRunningTests`, and `checkDrift` — which
+  only begin in `PlaybackModel.start()`, which no test calls, and `checkDrift` — which
   `PlaybackModelTests` does reach, through `tick()` — returns before logging
   anything because no status item exists under test, so `MenuBarFit.itemFrame`
   is nil. That is why the coordinator is where anything user-visible must be

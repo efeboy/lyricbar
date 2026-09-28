@@ -17,8 +17,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var controller: StatusItemController?
 
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard !PlaybackModel.isRunningTests else { return }
-        controller = StatusItemController(model: PlaybackModel())
+        guard !Self.isRunningTests else { return }
+        let model = PlaybackModel()
+        controller = StatusItemController(model: model)
+        model.start()
     }
 }
