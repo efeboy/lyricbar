@@ -27,6 +27,7 @@ enum MenuBarMetrics {
         measurer(fontSize: fontSize)(text)
     }
 
+    static let menuWidth: CGFloat = 160
     static var menuBarScreen: NSScreen? {
         NSScreen.screens.first
     }
@@ -44,27 +45,30 @@ enum MenuBarMetrics {
         max(minimumBoxWidth, statusStripWidth(on: screen) - systemItemPadding)
     }
 
-    static func boxWidth(_ preference: LyricWidth, fittedWidth: CGFloat) -> CGFloat {
-        max(minimumBoxWidth, min(fittedWidth, (preference.shareOfFit * fittedWidth).rounded()))
-    }
 }
 
-enum LyricWidth: String, CaseIterable, Sendable {
-    case compact, standard, fill
+enum WidthLadder {
 
-    var shareOfFit: CGFloat {
-        switch self {
-        case .compact:  0.5
-        case .standard: 0.75
-        case .fill:     1.0
-        }
+    static let rungs: [CGFloat] = [160, 200, 240, 280, 320, 360, 400]
+    static let step: CGFloat = 40
+    static let defaultRung: CGFloat = 240
+
+    static func available(widest: CGFloat = MenuBarMetrics.widestBox()) -> [CGFloat] {
+        let fitting = rungs.filter { $0 <= widest }
+        return fitting.isEmpty ? [rungs[0]] : fitting
     }
 
-    var title: String {
-        switch self {
-        case .compact:  String(localized: "Compact")
-        case .standard: String(localized: "Standard")
-        case .fill:     String(localized: "Fit Menu Bar")
+    static func snapped(_ width: CGFloat, widest: CGFloat = MenuBarMetrics.widestBox()) -> CGFloat {
+        let choices = available(widest: widest)
+        return choices.min { abs($0 - width) < abs($1 - width) } ?? defaultRung
+    }
+
+    static func migrated(band: String?) -> CGFloat? {
+        switch band {
+        case "compact":  160
+        case "standard": 200
+        case "fill":     240
+        default:         nil
         }
     }
 }

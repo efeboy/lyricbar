@@ -25,14 +25,16 @@ screen layout rebuilds only `menuLines`.
 | file | role |
 | --- | --- |
 | `LyricBarApp.swift` | `App` entry point. An empty `Settings` scene (required by `App`) and an `AppDelegate` that creates the model and the controller, then calls `model.start()`. |
-| `StatusItemController.swift` | Owns the `NSStatusItem`: sets `length`, hosts `LyricLabel`, builds the menu as its own `NSMenuDelegate`, and re-renders via `withObservationTracking`. |
+| `StatusItemController.swift` | Owns the `NSStatusItem`: sets `length`, hosts `LyricLabel`, pops up the menu on click and builds it as its own `NSMenuDelegate`, and re-renders via `withObservationTracking`. |
 | `LyricLabel.swift` | The SwiftUI view that draws the lyric, and `PassthroughHostingView`, which hosts it inside the status item button. |
-| `PlaybackModel.swift` | `@MainActor @Observable`. The poll loop, source selection, position extrapolation, the per-track fetch, the update check, and a `FitCoordinator`. |
-| `FitCoordinator.swift` | `@MainActor @Observable`. Decides *when* to measure the menu bar: launch calibration, the drift watchdog, screen changes. Publishes `fittedWidth` and `probeWidth`, and reports each refit through `onRefit`; `PlaybackModel.handleRefit` reapplies the Width band and rebuilds `menuLines`. It knows nothing about lyrics. |
-| `MenuBarFit.swift` | Measures how wide the item can be on this menu bar. See [width-fitting.md](width-fitting.md). |
-| `MenuBarMetrics.swift` | Text measurement, the `LyricWidth` bands, screen geometry. |
+| `PlaybackModel.swift` | `@MainActor @Observable`. The poll loop, source selection, position extrapolation, the per-track fetch, the update check, the width preference and screen-change re-snapping. |
+| `ItemPopover.swift` | An `NSPopover` anchored to the item; used for Settings and Tips. |
+| `SettingsView.swift` | The width slider and Open at Login. See [width.md](width.md). |
+| `TipsView.swift` | Usage tips shown from **Tips…**. |
+| `MenuHeader.swift` | The wrapping SwiftUI header row of the menu. See [menu-bar-item.md](menu-bar-item.md#the-menu). |
+| `MenuBarMetrics.swift` | Text measurement, `menuWidth`, `WidthLadder`, screen geometry. |
 | `LyricText.swift` | `fittedFontSize`, the font-size backstop. |
-| `FitLog.swift` | `os.Logger` categories and geometry formatters for the width detection. |
+| `FitLog.swift` | The `render` logger and number/rect formatters. |
 | `UpdateChecker.swift` | GitHub Releases check. See [releasing.md](releasing.md). |
 | `LoginItem.swift` | `SMAppService.mainApp` wrapper for Open at Login. |
 | `Playback/NowPlaying.swift` | `PlaybackBridge`, `BridgeSnapshot` (`now` / `unavailable` / `denied`), `NowPlaying`, and `PlaybackScript`, the AppleScript plumbing both bridges share. |
@@ -101,9 +103,6 @@ prompt for Automation, depend on what is playing, or resize the real menu bar.
   arrives, delete it, `lines`' extra role, and their tests.
 - **`position()` cannot report a denial.** Only `snapshot()` distinguishes
   `denied`, which is what drives the UI.
-- **The drift watchdog cannot grow the box mid-session.** Extra room is picked
-  up on the next launch. If that feels stale, add a user-initiated "re-measure"
-  rather than making drift bidirectional.
 - **A hang longer than the timeout re-fetches lyrics.** The player reads as
   unavailable, the track is forgotten, and lyrics are fetched again when it
   answers.

@@ -9,19 +9,28 @@ final class StatusItemController: NSObject {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
     private let label: PassthroughHostingView<LyricLabel>
+    private let settings: ItemPopover
+    private let tips: ItemPopover
+
+    private static let menuGap: CGFloat = 1
 
     init(model: PlaybackModel) {
         self.model = model
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.label = PassthroughHostingView(rootView: LyricLabel(
-            text: model.lineText, boxWidth: model.boxWidth, opacity: model.displayState.opacity))
+            text: model.lineText, boxWidth: model.lyricBoxWidth, opacity: model.displayState.opacity))
+        self.settings = ItemPopover(SettingsView(model: model))
+        self.tips = ItemPopover(TipsView())
         super.init()
 
         menu.delegate = self
         menu.autoenablesItems = false
-        statusItem.menu = menu
+        menu.minimumWidth = MenuBarMetrics.menuWidth
 
         if let button = statusItem.button {
+            button.target = self
+            button.action = #selector(showMenu)
+            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
             button.title = ""
             button.imagePosition = .noImage
             label.sizingOptions = []
@@ -36,10 +45,9 @@ final class StatusItemController: NSObject {
 
     private func render() {
         guard let button = statusItem.button else { return }
-        let box = model.boxWidth
+        let box = model.lyricBoxWidth
         let text = model.lineText
 
-        MenuBarFit.itemWindow = button.window
         statusItem.length = box
         label.rootView = LyricLabel(text: text, boxWidth: box, opacity: model.displayState.opacity)
         button.setAccessibilityLabel(text)
@@ -49,8 +57,6 @@ final class StatusItemController: NSObject {
 
     private func logFit(text: String, box: CGFloat, window: NSWindow?) {
         let state = model.displayState
-        let lyricBox = model.lyricBoxWidth
-        let probing = box != lyricBox
         let size = LyricText.fittedFontSize(for: text, boxWidth: box)
         let drawn = MenuBarMetrics.textWidth(text, fontSize: size)
         let overflow = drawn - box
@@ -59,14 +65,11 @@ final class StatusItemController: NSObject {
             FitLog.render.error("""
                 clipped state=\(state.rawValue, privacy: .public) \
                 box=\(FitLog.points(box), privacy: .public) \
-                lyricBox=\(FitLog.points(lyricBox), privacy: .public) \
-                fittedWidth=\(FitLog.points(self.model.fittedWidth), privacy: .public) \
                 chars=\(text.count, privacy: .public) \
                 fontSize=\(size, format: .fixed(precision: 1), privacy: .public) \
                 floor=\(MenuBarMetrics.minimumFontSize, format: .fixed(precision: 1), privacy: .public) \
                 drawnWidth=\(FitLog.points(drawn), privacy: .public) \
                 overflow=\(FitLog.points(overflow), privacy: .public) \
-                probing=\(probing, privacy: .public) \
                 \(FitLog.geometry(window?.frame), privacy: .public)
                 """)
             return
@@ -75,12 +78,10 @@ final class StatusItemController: NSObject {
         FitLog.render.debug("""
             drew state=\(state.rawValue, privacy: .public) \
             box=\(FitLog.points(box), privacy: .public) \
-            lyricBox=\(FitLog.points(lyricBox), privacy: .public) \
             chars=\(text.count, privacy: .public) \
             fontSize=\(size, format: .fixed(precision: 1), privacy: .public) \
             drawnWidth=\(FitLog.points(drawn), privacy: .public) \
             headroom=\(FitLog.points(-overflow), privacy: .public) \
-            probing=\(probing, privacy: .public) \
             \(FitLog.geometry(window?.frame), privacy: .public)
             """)
     }
@@ -88,7 +89,7 @@ final class StatusItemController: NSObject {
     private func observe() {
         withObservationTracking {
             _ = model.lineText
-            _ = model.boxWidth
+            _ = model.lyricBoxWidth
             _ = model.displayState
         } onChange: { [weak self] in
             Task { @MainActor in
@@ -103,12 +104,10 @@ final class StatusItemController: NSObject {
 extension StatusItemController: NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        model.refreshLoginState()
         menu.removeAllItems()
 
-        let status = NSMenuItem(title: model.header, action: nil, keyEquivalent: "")
-        status.isEnabled = false
-        menu.addItem(status)
+        let header = model.headerLines
+        menu.addItem(MenuHeader.item(title: header.title, detail: header.detail))
         menu.addItem(.separator())
 
         let hide = NSMenuItem(title: model.isHidden ? String(localized: "Show Lyrics") : String(localized: "Hide Lyrics"),
@@ -116,14 +115,15 @@ extension StatusItemController: NSMenuDelegate {
         hide.target = self
         menu.addItem(hide)
 
-        let login = NSMenuItem(title: String(localized: "Open at Login"),
-                               action: #selector(toggleLogin), keyEquivalent: "")
-        login.target = self
-        login.state = model.loginEnabled ? .on : .off
-        login.isEnabled = model.loginSupported
-        menu.addItem(login)
+        let preferences = NSMenuItem(title: String(localized: "Settings…"),
+                                     action: #selector(openSettings), keyEquivalent: ",")
+        preferences.target = self
+        menu.addItem(preferences)
 
-        menu.addItem(widthItem())
+        let help = NSMenuItem(title: String(localized: "Tips…"),
+                              action: #selector(openTips), keyEquivalent: "")
+        help.target = self
+        menu.addItem(help)
 
         if model.displayState == .denied {
             let automation = NSMenuItem(title: String(localized: "Open Automation Settings…"),
@@ -152,33 +152,27 @@ extension StatusItemController: NSMenuDelegate {
         menu.addItem(quit)
     }
 
-    private func widthItem() -> NSMenuItem {
-        let item = NSMenuItem(title: String(localized: "Width"), action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
-        for band in LyricWidth.allCases {
-            let row = NSMenuItem(title: band.title,
-                                 action: #selector(selectWidth(_:)), keyEquivalent: "")
-            row.target = self
-            row.representedObject = band
-            row.state = model.widthPreference == band ? .on : .off
-            submenu.addItem(row)
-        }
-        item.submenu = submenu
-        return item
-    }
-
     @objc private func toggleHidden() {
         model.isHidden.toggle()
     }
 
-    @objc private func toggleLogin() {
-        model.loginEnabled.toggle()
+    @objc private func showMenu() {
+        guard let button = statusItem.button else { return }
+        guard let window = button.window else { return }
+        let origin = NSPoint(x: window.frame.minX, y: window.frame.minY - Self.menuGap)
+        button.highlight(true)
+        menu.popUp(positioning: nil, at: origin, in: nil)
+        button.highlight(false)
     }
 
-    @objc private func selectWidth(_ sender: NSMenuItem) {
-        guard let band = sender.representedObject as? LyricWidth else { return }
-        model.widthPreference = band
+    @objc private func openTips() {
+        guard let button = statusItem.button else { return }
+        tips.toggle(from: button)
+    }
+
+    @objc private func openSettings() {
+        guard let button = statusItem.button else { return }
+        settings.toggle(from: button)
     }
 
     @objc private func openUpdate() {

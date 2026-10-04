@@ -4,7 +4,7 @@
 xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 ```
 
-82 tests in 10 Swift Testing suites:
+73 tests in 9 Swift Testing suites:
 
 | suite | covers |
 | --- | --- |
@@ -12,9 +12,8 @@ xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test
 | `LRCLibMatchingTests` | `bestMatch(among:duration:)`, split out of `fetch` so duration matching is testable offline. |
 | `LyricReflowTests` | Where a long line breaks and when each chunk swaps. Uses injected metrics (1pt per character, and 9/13 of that) so expected splits don't drift with the OS. |
 | `NoTruncationTests` | The end-to-end guarantee with real menu bar metrics across five box widths: every chunk fits, and no character is lost. Asserts inequalities, not exact splits. |
-| `MenuBarBoxTests` | `fittedFontSize` stays within `[minimumFontSize, baseFontSize]`, overflow bottoms out at the floor, dimmed states rank below `.playing`, `holdsLyric` per state, and the width bands. |
-| `MenuBarFitTests` | The pure half of calibration: `crowdsNeighbours`, `optimisticBound`, the cache round-trip, signatures. |
-| `PlaybackModelTests` | The tick logic through injected fakes: track changes, loading, instrumental intros, resuming mid-line, hide/show, Spotify winning ties, Automation denial. |
+| `MenuBarBoxTests` | `fittedFontSize` stays within `[minimumFontSize, baseFontSize]`, overflow bottoms out at the floor, dimmed states rank below `.playing`, `holdsLyric` per state, and the `WidthLadder`: even rungs, hiding rungs that don't fit, snapping, band migration. |
+| `PlaybackModelTests` | The width preference persisting and migrating, the title/artist header split, and the tick logic through injected fakes: track changes, loading, instrumental intros, resuming mid-line, hide/show, Spotify winning ties, Automation denial. |
 | `LoginItemTests` | `isStableLocation` for installed and build-output paths. |
 | `UpdateCheckerTests` | `isNewer(_:than:)`: numeric comparison, missing components as zero, non-numeric tags never newer. |
 
@@ -27,7 +26,7 @@ on it.
 Tests cannot show that the menu bar item renders, that Automation was granted,
 or that centring and clipping in `LyricLabel` look right; `LyricLabel`'s modifier
 chain cannot be inspected. Verify those on the live app — see
-[width-fitting.md](width-fitting.md#verifying-against-the-live-item).
+[width.md](width.md#verifying-against-the-live-item).
 
 The test bundle is hosted, and `AppDelegate` creates nothing under test. Drive the
 model with `refreshNow()` and `awaitPendingLyrics()` rather than sleeps; never

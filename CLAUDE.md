@@ -9,7 +9,7 @@ Spotify or Apple Music is playing. It is a single Xcode app target
 (`LyricBar.xcodeproj`, sources in `LyricBar/`, tests in `LyricBarTests/`) with no
 third-party dependencies. The item is an `NSStatusItem` owned by
 `StatusItemController`; the lyric is drawn by a SwiftUI view hosted inside it;
-clicking it opens an `NSMenu`.
+clicking it pops up an `NSMenu`, and Settings and Tips are popovers.
 
 It is public (MIT) and distributed to friends as a notarized DMG on GitHub
 Releases.
@@ -23,7 +23,7 @@ lives in `docs/`:
 | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | the poll loop, bridges, `PlaybackModel`, test seams |
 | [docs/menu-bar-item.md](docs/menu-bar-item.md) | `StatusItemController`, `LyricLabel`, the menu, placeholders |
-| [docs/width-fitting.md](docs/width-fitting.md) | `MenuBarFit`, `FitCoordinator`, `FitLog`, width bands |
+| [docs/width.md](docs/width.md) | `WidthLadder`, Settings, `FitLog`, and why there is no auto-fit |
 | [docs/lyrics.md](docs/lyrics.md) | `LyricReflow`, `LyricText`, `LRCLibClient` |
 | [docs/platform-notes.md](docs/platform-notes.md) | AppleScript, Automation, `LoginItem`, localization |
 | [docs/releasing.md](docs/releasing.md) | build settings, `Scripts/dist.sh`, `UpdateChecker` |
@@ -50,25 +50,23 @@ lives in `docs/`:
 
 Each is explained in `docs/`; breaking one has shipped a bug before.
 
-- **The item is one fixed box in every state.** `boxWidth` is
-  `probeWidth ?? lyricBoxWidth`; geometry never depends on `DisplayState`.
+- **The item is one fixed box in every state.** Its width is `lyricBoxWidth`,
+  the user's rung snapped to the screen; geometry never depends on `DisplayState`.
 - **`statusItem.length = box`, never `box + padding`.** The system adds 16pt.
 - **No `MenuBarExtra`, no image label.** It cannot hold a fixed width.
 - **`LyricLabel` clips, never ellipsizes**: `.fixedSize()` inside a clipped
   frame, not `.lineLimit(1)`. Animations stay inside the frame.
 - **`PassthroughHostingView.hitTest` returns `nil`** and `sizingOptions = []`.
-- **`lineText` is never empty** and shows the placeholder while `probeWidth` is
-  set.
-- **`MenuBarFit` reads geometry only through `settle`**, and recovers after every
-  rejected probe.
-- **Reflow with `lyricBoxWidth`, never `boxWidth`.**
+- **`lineText` is never empty.**
+- **No auto-fit by probing the item's own frame.** On macOS 27 it cannot see
+  neighbours folded into the overflow chevron. The width is the user's choice.
 - **Resolve screens with `MenuBarMetrics.menuBarScreen`, never `NSScreen.main`.**
 - **AppleScript runs only on the bridge actors**, with a 2s event timeout.
   `tick()` re-checks state after every `await`.
 - **Lyrics are never truncated.** Reflow first; `fittedFontSize` is only the
   backstop.
-- **Log calibration and drift at `.notice`/`.error`**; only `render`'s `drew` is
-  `.debug`. `FitLog` helpers never take a `String`.
+- **`FitLog` helpers never take a `String`**, and only `render`'s `drew` is
+  `.debug`.
 - **Keep the repository public** and release tags plain (`vX.Y`), or the update
   check breaks silently.
 
@@ -76,12 +74,12 @@ Each is explained in `docs/`; breaking one has shipped a bug before.
 
 ```sh
 open LyricBar.xcodeproj                                          # ⌘R to run
-xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test     # 82 tests
+xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test     # 73 tests
 ```
 
 A passing test run does not prove the menu bar item works. For anything visible,
 install an archived build and check it live (see
-[docs/width-fitting.md](docs/width-fitting.md#verifying-against-the-live-item)).
+[docs/width.md](docs/width.md#verifying-against-the-live-item)).
 
 To install or release, use the local `ship` skill (`.claude/skills/ship/`, not in
 the repo) or follow [docs/releasing.md](docs/releasing.md). Never copy an

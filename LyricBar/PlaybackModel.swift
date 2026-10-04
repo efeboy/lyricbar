@@ -7,13 +7,11 @@ import Observation
 final class PlaybackModel {
 
     var lineText: String {
-        PlaybackModel.displayText(chunk: chunk,
-                                  probing: fit.probeWidth != nil,
-                                  state: displayState)
+        PlaybackModel.displayText(chunk: chunk, state: displayState)
     }
 
-    static func displayText(chunk: String, probing: Bool, state: DisplayState) -> String {
-        guard !probing, state.holdsLyric, !chunk.isEmpty else {
+    static func displayText(chunk: String, state: DisplayState) -> String {
+        guard state.holdsLyric, !chunk.isEmpty else {
             return state == .denied ? deniedPlaceholder : gapPlaceholder
         }
         return chunk
@@ -24,25 +22,32 @@ final class PlaybackModel {
     private(set) var trackTitle = PlaybackModel.idleTitle
     private(set) var trackArtist = ""
     private(set) var trackSubtitle = ""
+
+    var headerLines: (title: String, detail: String?) {
+        guard !trackArtist.isEmpty,
+              header == Self.trackHeader(title: trackTitle, artist: trackArtist) else {
+            return (header, nil)
+        }
+        return (trackTitle, trackArtist)
+    }
+
+    static func trackHeader(title: String, artist: String) -> String {
+        "\(title) — \(artist)"
+    }
     private(set) var previousLine = ""
     private(set) var currentLine = ""
     private(set) var nextLine = ""
 
-    var boxWidth: CGFloat {
-        fit.probeWidth ?? lyricBoxWidth
-    }
-
-    var fittedWidth: CGFloat { fit.fittedWidth }
-
     private(set) var lyricBoxWidth: CGFloat
 
-    var widthPreference: LyricWidth {
+    var widthPreference: CGFloat {
         get { storedWidth }
         set {
-            guard newValue != storedWidth else { return }
-            storedWidth = newValue
-            defaults.set(newValue.rawValue, forKey: Keys.width)
-            applyFittedWidth()
+            let rung = WidthLadder.snapped(newValue)
+            guard rung != storedWidth else { return }
+            storedWidth = rung
+            defaults.set(Double(rung), forKey: Keys.width)
+            applyWidth()
         }
     }
 
@@ -88,7 +93,7 @@ final class PlaybackModel {
     }
 
     private var chunk = ""
-    private var storedWidth: LyricWidth
+    private var storedWidth: CGFloat
     private var hidden = false
     private var loginRegistered = LoginItem.isEnabled
 
@@ -96,7 +101,6 @@ final class PlaybackModel {
     @ObservationIgnored private let clock = ContinuousClock()
     @ObservationIgnored private let bridges: [PlaybackBridge]
     @ObservationIgnored private let lyrics: any LyricsProvider
-    @ObservationIgnored private let fit: FitCoordinator
 
     @ObservationIgnored private var activeBridge: PlaybackBridge?
     @ObservationIgnored private var lines: [LyricLine] = []
@@ -115,6 +119,7 @@ final class PlaybackModel {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var updateTask: Task<Void, Never>?
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
+    @ObservationIgnored private var screenTask: Task<Void, Never>?
 
     private static let gapPlaceholder = "♪"
     private static let deniedPlaceholder = "⚠\u{FE0E}"
@@ -130,7 +135,10 @@ final class PlaybackModel {
     private static let metadataInterval: Double = 1
 
     private enum Keys {
-        static let width = "lyricWidth"
+        static let width = "lyricWidthPoints"
+        static let legacyBand = "lyricWidth"
+        static let legacyFitPrefix = "fittedBox."
+        static let legacySlack = "fitSlack"
     }
 
     init(defaults: UserDefaults = .standard,
@@ -141,35 +149,30 @@ final class PlaybackModel {
         self.lyrics = lyrics
         appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
 
-        let width = LyricWidth(rawValue: defaults.string(forKey: Keys.width) ?? "") ?? .fill
-        let fit = FitCoordinator(defaults: defaults)
-
-        self.fit = fit
+        let width = Self.storedRung(in: defaults)
         storedWidth = width
-        lyricBoxWidth = MenuBarMetrics.boxWidth(width, fittedWidth: fit.fittedWidth)
-        fit.onRefit = { [weak self] refit in self?.handleRefit(refit) }
+        lyricBoxWidth = WidthLadder.snapped(width)
+    }
+
+    private static func storedRung(in defaults: UserDefaults) -> CGFloat {
+        if defaults.object(forKey: Keys.width) != nil {
+            return defaults.double(forKey: Keys.width)
+        }
+        let migrated = WidthLadder.migrated(band: defaults.string(forKey: Keys.legacyBand))
+        defaults.removeObject(forKey: Keys.legacyBand)
+        defaults.removeObject(forKey: Keys.legacySlack)
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(Keys.legacyFitPrefix) {
+            defaults.removeObject(forKey: key)
+        }
+        let rung = migrated ?? WidthLadder.defaultRung
+        defaults.set(Double(rung), forKey: Keys.width)
+        return rung
     }
 
     func start() {
-        fit.observeScreenChanges()
+        observeScreenChanges()
         startPolling()
         startUpdateChecks()
-
-        if let cached = fit.launchFit {
-            FitLog.calibration.notice("""
-                cacheHit signature=\(MenuBarFit.signature(), privacy: .public) \
-                box=\(FitLog.points(cached.boxWidth), privacy: .public) \
-                rightEdge=\(FitLog.points(cached.rightEdge), privacy: .public) \
-                lyricBox=\(FitLog.points(self.lyricBoxWidth), privacy: .public) \
-                preference=\(self.storedWidth.rawValue, privacy: .public)
-                """)
-        } else {
-            FitLog.calibration.notice("""
-                cacheMiss signature=\(MenuBarFit.signature(), privacy: .public) \
-                preference=\(self.storedWidth.rawValue, privacy: .public)
-                """)
-            fit.calibrate(reason: .launchNoCache)
-        }
     }
 
     func refreshNow() async {
@@ -193,34 +196,28 @@ final class PlaybackModel {
     private static let automationSettingsURL =
         "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
 
-    private func applyFittedWidth() {
-        lyricBoxWidth = MenuBarMetrics.boxWidth(storedWidth, fittedWidth: fittedWidth)
+    private func applyWidth() {
+        let width = WidthLadder.snapped(storedWidth)
+        guard width != lyricBoxWidth else { return }
+        lyricBoxWidth = width
         rebuildMenuLines()
+    }
+
+    private func observeScreenChanges() {
+        screenTask?.cancel()
+        screenTask = Task { [weak self] in
+            let changes = NotificationCenter.default
+                .notifications(named: NSApplication.didChangeScreenParametersNotification)
+                .map { _ in () }
+            for await _ in changes {
+                self?.applyWidth()
+            }
+        }
     }
 
     private func rebuildMenuLines() {
         menuLines = LyricReflow.expand(lines, trackDuration: trackDuration, width: lyricBoxWidth)
         shownMenuLine = nil
-    }
-
-    private func handleRefit(_ refit: FitCoordinator.Refit) {
-        applyFittedWidth()
-        switch refit {
-        case .calibrated(let reason):
-            FitLog.calibration.notice("""
-                applied reason=\(reason.rawValue, privacy: .public) \
-                fittedWidth=\(FitLog.points(self.fittedWidth), privacy: .public) \
-                preference=\(self.storedWidth.rawValue, privacy: .public) \
-                lyricBox=\(FitLog.points(self.lyricBoxWidth), privacy: .public) \
-                menuLines=\(self.menuLines.count, privacy: .public)
-                """)
-        case .restoredFromCache:
-            FitLog.calibration.notice("""
-                screenChangeCacheHit \
-                box=\(FitLog.points(self.fittedWidth), privacy: .public) \
-                lyricBox=\(FitLog.points(self.lyricBoxWidth), privacy: .public)
-                """)
-        }
     }
 
     func openAvailableUpdate() {
@@ -268,7 +265,6 @@ final class PlaybackModel {
 
         if probeMetadata {
             lastMetadataProbe = started
-            fit.checkDrift()
             let probe = await probeSources()
             guard !hidden else { return }
             automationDenied = probe.denied && probe.active == nil
@@ -354,7 +350,7 @@ final class PlaybackModel {
     }
 
     private func show(_ snapshot: NowPlaying) {
-        header = "\(snapshot.title) — \(snapshot.artist)"
+        header = Self.trackHeader(title: snapshot.title, artist: snapshot.artist)
         trackTitle = snapshot.title
         trackArtist = snapshot.artist
         trackSubtitle = snapshot.album.isEmpty
@@ -436,7 +432,7 @@ final class PlaybackModel {
         shownLyricLine = nil
         positionSample = nil
         if let snapshot = lastSnapshot {
-            header = "\(snapshot.title) — \(snapshot.artist)"
+            header = Self.trackHeader(title: snapshot.title, artist: snapshot.artist)
         }
         lastSnapshot = nil
     }
@@ -464,7 +460,7 @@ final class PlaybackModel {
                     self.lines = parsed
                     self.rebuildMenuLines()
                     self.shownLyricLine = nil
-                    if !self.hidden { self.header = "\(title) — \(artist)" }
+                    if !self.hidden { self.header = Self.trackHeader(title: title, artist: artist) }
                     return
                 case .unavailable:
                     self.fetching = false

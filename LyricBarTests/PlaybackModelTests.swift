@@ -39,8 +39,6 @@ struct PlaybackModelTests {
                            lyrics: LyricsFetchResult = .unavailable) -> PlaybackModel {
         let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
         defaults.removePersistentDomain(forName: Self.suiteName)
-        MenuBarFit.store(MenuBarFit.Fit(boxWidth: 300, rightEdge: 1000),
-                         for: MenuBarFit.signature(), in: defaults)
         return PlaybackModel(defaults: defaults, bridges: bridges,
                              lyrics: FakeLyrics(result: lyrics))
     }
@@ -59,7 +57,7 @@ struct PlaybackModelTests {
 
         #expect(model.displayState == .idle)
         #expect(model.lineText == "♪")
-        #expect(model.boxWidth == model.lyricBoxWidth)
+        #expect(model.lyricBoxWidth == WidthLadder.defaultRung)
     }
 
     @Test("A refused Automation prompt is reported, not silently ignored")
@@ -102,7 +100,7 @@ struct PlaybackModelTests {
         #expect(model.displayState == .loading)
         #expect(model.header == "Loading lyrics…")
         #expect(model.trackTitle == "Girl")
-        #expect(model.boxWidth == model.lyricBoxWidth)
+        #expect(model.lyricBoxWidth == WidthLadder.defaultRung)
     }
 
     @Test("No-lyrics is only reported once the fetch has actually resolved")
@@ -118,7 +116,7 @@ struct PlaybackModelTests {
 
         #expect(model.displayState == .noLyrics)
         #expect(model.header == "No synced lyrics found")
-        #expect(model.boxWidth == model.lyricBoxWidth)
+        #expect(model.lyricBoxWidth == WidthLadder.defaultRung)
     }
 
     @Test("Once lyrics land, the line at the playhead is what shows")
@@ -136,7 +134,7 @@ struct PlaybackModelTests {
         #expect(model.lineText == "second")
         #expect(model.currentLine == "second")
         #expect(model.nextLine == "third")
-        #expect(model.boxWidth == model.lyricBoxWidth)
+        #expect(model.lyricBoxWidth == WidthLadder.defaultRung)
     }
 
     @Test("The intro before the first timestamp is instrumental, and holds the box")
@@ -151,7 +149,7 @@ struct PlaybackModelTests {
         await model.refreshNow()
 
         #expect(model.displayState == .instrumental)
-        #expect(model.boxWidth == model.lyricBoxWidth)
+        #expect(model.lyricBoxWidth == WidthLadder.defaultRung)
     }
 
     @Test("Spotify wins when both apps are playing")
@@ -179,7 +177,7 @@ struct PlaybackModelTests {
 
         #expect(model.displayState == .paused)
         #expect(model.trackTitle == "Girl")
-        #expect(model.boxWidth == model.lyricBoxWidth)
+        #expect(model.lyricBoxWidth == WidthLadder.defaultRung)
     }
 
     @Test("Resuming mid-line shows the lyric again without waiting for the next line")
@@ -243,7 +241,7 @@ struct PlaybackModelTests {
 
         #expect(!model.displayState.holdsLyric)
         #expect(model.lineText == "♪")
-        #expect(model.boxWidth == model.lyricBoxWidth)
+        #expect(model.lyricBoxWidth == WidthLadder.defaultRung)
     }
 
     @Test("Playback stopping clears the lyric rather than leaving a stale one on screen")
@@ -264,15 +262,58 @@ struct PlaybackModelTests {
         #expect(model.displayState == .idle)
         #expect(!model.displayState.holdsLyric)
         #expect(model.lineText == "♪")
-        #expect(model.boxWidth == model.lyricBoxWidth)
+        #expect(model.lyricBoxWidth == WidthLadder.defaultRung)
     }
 
-    @Test("A calibration probe never renders a lyric into the probe box")
-    func probingShowsThePlaceholder() {
-        let lyric = "Somewhere a long train is leaving the station"
+    @Test("A playing track splits the menu header into title and artist")
+    func headerSplitsTitleAndArtist() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
 
-        #expect(PlaybackModel.displayText(chunk: lyric, probing: true, state: .playing) == "♪")
-        #expect(PlaybackModel.displayText(chunk: lyric, probing: false, state: .playing) == lyric)
+        await model.refreshNow()
+        await model.awaitPendingLyrics()
+
+        #expect(model.headerLines.title == "Girl")
+        #expect(model.headerLines.detail == "The Beatles")
+    }
+
+    @Test("A status message stays a single header without a detail line")
+    func statusHeaderHasNoDetail() async {
+        let model = makeModel(bridges: [FakeBridge(source: .spotify)])
+
+        await model.refreshNow()
+
+        #expect(model.headerLines.detail == nil)
+        #expect(model.headerLines.title == model.header)
+    }
+
+    @Test("A chosen width snaps to a rung and survives a relaunch")
+    func widthPreferencePersists() {
+        let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        let model = PlaybackModel(defaults: defaults, bridges: [], lyrics: FakeLyrics(result: .unavailable))
+
+        model.widthPreference = 290
+
+        #expect(model.widthPreference == 280)
+        #expect(model.lyricBoxWidth == 280)
+        let relaunched = PlaybackModel(defaults: defaults, bridges: [], lyrics: FakeLyrics(result: .unavailable))
+        #expect(relaunched.lyricBoxWidth == 280)
+    }
+
+    @Test("An old width band carries over and the measured-fit cache is cleared")
+    func migratesLegacyWidth() {
+        let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        defaults.set("compact", forKey: "lyricWidth")
+        defaults.set([253.0, 1249.0], forKey: "fittedBox.1728-1117-2-956-771-1-130")
+
+        let model = PlaybackModel(defaults: defaults, bridges: [], lyrics: FakeLyrics(result: .unavailable))
+
+        #expect(model.lyricBoxWidth == 160)
+        #expect(defaults.object(forKey: "lyricWidth") == nil)
+        #expect(defaults.object(forKey: "fittedBox.1728-1117-2-956-771-1-130") == nil)
     }
 
     @Test("A state with nothing to say never renders a lyric", arguments: [
@@ -282,23 +323,23 @@ struct PlaybackModelTests {
     ])
     func collapsedStatesShowThePlaceholder(state: PlaybackModel.DisplayState) {
         #expect(!state.holdsLyric)
-        #expect(PlaybackModel.displayText(chunk: "a stale lyric", probing: false, state: state) == "♪")
+        #expect(PlaybackModel.displayText(chunk: "a stale lyric", state: state) == "♪")
     }
 
     @Test("A denial outranks a stale lyric")
     func denialShowsItsOwnPlaceholder() {
         #expect(PlaybackModel.displayText(chunk: "a stale lyric",
-                                          probing: false, state: .denied) == "⚠\u{FE0E}")
+                                          state: .denied) == "⚠\u{FE0E}")
     }
 
-    @Test("Lyric-holding states still show the lyric when not probing", arguments: [
+    @Test("Lyric-holding states show the lyric", arguments: [
         PlaybackModel.DisplayState.playing,
         .instrumental,
         .loading,
     ])
     func lyricStatesShowTheLyric(state: PlaybackModel.DisplayState) {
         #expect(state.holdsLyric)
-        #expect(PlaybackModel.displayText(chunk: "second", probing: false, state: state) == "second")
-        #expect(PlaybackModel.displayText(chunk: "", probing: false, state: state) == "♪")
+        #expect(PlaybackModel.displayText(chunk: "second", state: state) == "second")
+        #expect(PlaybackModel.displayText(chunk: "", state: state) == "♪")
     }
 }

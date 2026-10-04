@@ -95,33 +95,43 @@ struct MenuBarBoxTests {
         #expect(size >= MenuBarMetrics.minimumFontSize)
     }
 
-    @Test("Fit Menu Bar takes exactly the measured fit, and stays finite")
-    func fillTakesTheWholeFit() {
-        #expect(MenuBarMetrics.boxWidth(.fill, fittedWidth: 254) == 254)
-        #expect(MenuBarMetrics.boxWidth(.fill, fittedWidth: 254).isFinite)
+    @Test("The ladder climbs in even steps from narrowest to widest")
+    func ladderIsEven() {
+        let rungs = WidthLadder.rungs
+
+        #expect(rungs == rungs.sorted())
+        #expect(zip(rungs, rungs.dropFirst()).allSatisfy { $1 - $0 == WidthLadder.step })
+        #expect(rungs.contains(WidthLadder.defaultRung))
     }
 
-    @Test("No band can claim more menu bar than was measured", arguments: LyricWidth.allCases)
-    func neverExceedsTheFit(width: LyricWidth) {
-        for fitted in [120.0, 254.0, 600.0] {
-            #expect(MenuBarMetrics.boxWidth(width, fittedWidth: fitted)
-                    <= max(fitted, MenuBarMetrics.minimumBoxWidth))
-        }
+    @Test("Rungs wider than the room beside the notch are left out")
+    func ladderHidesRungsThatDoNotFit() {
+        #expect(WidthLadder.available(widest: 755) == WidthLadder.rungs)
+        #expect(WidthLadder.available(widest: 300) == [160, 200, 240, 280])
     }
 
-    @Test("Every band is a distinct width, on a crowded bar as much as a roomy one",
-          arguments: [254.0, 400.0, 600.0, 756.0])
-    func bandsStayDistinct(fitted: CGFloat) {
-        let widths = LyricWidth.allCases.map { MenuBarMetrics.boxWidth($0, fittedWidth: fitted) }
-
-        #expect(Set(widths).count == LyricWidth.allCases.count, "collapsed to \(widths)")
-        #expect(widths == widths.sorted())
+    @Test("A screen too narrow for any rung still offers the narrowest")
+    func ladderNeverEmpty() {
+        #expect(WidthLadder.available(widest: 100) == [WidthLadder.rungs[0]])
     }
 
-    @Test("The box never collapses below the readable floor", arguments: [0.0, 1.0, 40.0])
-    func floorHolds(fitted: CGFloat) {
-        #expect(MenuBarMetrics.boxWidth(.fill, fittedWidth: fitted)
-                == MenuBarMetrics.minimumBoxWidth)
+    @Test("A width snaps to the nearest rung that fits", arguments: [
+        (CGFloat(250), CGFloat(755), CGFloat(240)),
+        (CGFloat(270), CGFloat(755), CGFloat(280)),
+        (CGFloat(400), CGFloat(300), CGFloat(280)),
+        (CGFloat(0), CGFloat(755), CGFloat(160)),
+    ])
+    func snapsToRung(width: CGFloat, widest: CGFloat, expected: CGFloat) {
+        #expect(WidthLadder.snapped(width, widest: widest) == expected)
+    }
+
+    @Test("The old width bands map onto nearby rungs")
+    func migratesBands() {
+        #expect(WidthLadder.migrated(band: "compact") == 160)
+        #expect(WidthLadder.migrated(band: "standard") == 200)
+        #expect(WidthLadder.migrated(band: "fill") == 240)
+        #expect(WidthLadder.migrated(band: "wide") == nil)
+        #expect(WidthLadder.migrated(band: nil) == nil)
     }
 
     @Test("The widest box leaves room for the padding AppKit adds")
