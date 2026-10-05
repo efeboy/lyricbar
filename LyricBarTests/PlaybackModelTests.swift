@@ -302,6 +302,101 @@ struct PlaybackModelTests {
         #expect(relaunched.lyricBoxWidth == 280)
     }
 
+    @Test("A positive offset shows the next line early")
+    func positiveOffsetLeads() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        await model.refreshNow()
+        await model.awaitPendingLyrics()
+        spotify.positionValue = 18
+        await model.refreshNow()
+        try? #require(model.lineText == "first")
+
+        model.lyricOffset = 2.5
+
+        #expect(model.lineText == "second")
+        #expect(model.currentLine == "second")
+    }
+
+    @Test("A negative offset holds the previous line")
+    func negativeOffsetLags() async {
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = makeModel(bridges: [spotify], lyrics: .synced(lines))
+
+        await model.refreshNow()
+        await model.awaitPendingLyrics()
+        model.lyricOffset = -2
+        spotify.positionValue = 21
+        await model.refreshNow()
+
+        #expect(model.lineText == "first")
+        #expect(model.currentLine == "first")
+    }
+
+    @Test("An offset survives a relaunch for its track and leaves other tracks alone")
+    func offsetPersistsPerTrack() async {
+        let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = PlaybackModel(defaults: defaults, bridges: [spotify],
+                                  lyrics: FakeLyrics(result: .synced(lines)))
+        await model.refreshNow()
+        model.lyricOffset = 1.5
+
+        let relaunched = PlaybackModel(defaults: defaults, bridges: [spotify],
+                                       lyrics: FakeLyrics(result: .synced(lines)))
+        await relaunched.refreshNow()
+        #expect(relaunched.lyricOffset == 1.5)
+
+        spotify.next = track("s2", title: "Michelle")
+        await relaunched.refreshNow()
+        #expect(relaunched.lyricOffset == 0)
+
+        spotify.next = track("s1")
+        await relaunched.refreshNow()
+        #expect(relaunched.lyricOffset == 1.5)
+    }
+
+    @Test("Setting the offset back to zero removes the stored entry")
+    func zeroOffsetIsNotStored() async {
+        let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        let spotify = FakeBridge(source: .spotify)
+        spotify.next = track("s1")
+        let model = PlaybackModel(defaults: defaults, bridges: [spotify],
+                                  lyrics: FakeLyrics(result: .unavailable))
+        await model.refreshNow()
+
+        model.lyricOffset = 0.75
+        #expect(defaults.dictionary(forKey: "lyricOffsets")?["s1"] as? Double == 0.75)
+
+        model.lyricOffset = 0
+        #expect(defaults.dictionary(forKey: "lyricOffsets")?["s1"] == nil)
+    }
+
+    @Test("Out-of-range offsets clamp and snap, and nothing playing ignores them")
+    func offsetClampsAndNeedsATrack() async {
+        let spotify = FakeBridge(source: .spotify)
+        let model = makeModel(bridges: [spotify])
+
+        await model.refreshNow()
+        model.lyricOffset = 3
+        #expect(model.lyricOffset == 0)
+
+        spotify.next = track("s1")
+        await model.refreshNow()
+        model.lyricOffset = 42
+        #expect(model.lyricOffset == PlaybackModel.offsetLimit)
+        model.lyricOffset = -42
+        #expect(model.lyricOffset == -PlaybackModel.offsetLimit)
+        model.lyricOffset = 1.1
+        #expect(model.lyricOffset == 1)
+    }
+
     @Test("An old width band carries over and the measured-fit cache is cleared")
     func migratesLegacyWidth() {
         let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard

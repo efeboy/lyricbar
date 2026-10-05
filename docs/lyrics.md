@@ -38,6 +38,32 @@ Syllable share is the best free proxy: a median of 0.14s from character share,
 against 0.60s (p90 1.69s) for a naive midpoint. An on-device model would not
 help — it cannot hear the vocal.
 
+## Per-track timing offset
+
+LRCLIB lyrics are sometimes synced against a different master than the one the
+player is playing, so every line on that song lands early or late by a constant
+amount. The fix is per song, not global: a global offset would correct one track
+and break every other. Settings has a **Lyric timing** stepper for the current
+song (`PlaybackModel.lyricOffset`).
+
+- **Sign.** The offset is seconds added to the player position before
+  `index(at:)`, so a positive offset shows lines earlier. The UI never shows a
+  sign, only "earlier" / "later".
+- **Range and step.** ±`offsetLimit` (10s) in `offsetStep` (0.25s) steps. The
+  poll loop ticks every 0.5s, so a finer step would not be visible.
+- **Storage.** One `UserDefaults` key, `lyricOffsets`, a `[String: Double]` keyed
+  by `trackID` (the Spotify track URI or the Music persistent ID, both stable
+  across launches). Only non-zero offsets are stored; setting 0 removes the
+  entry. A track change loads the new track's offset right after `clear()`.
+- **Applies on the click.** The setter re-runs the line lookup at the
+  extrapolated position (`extrapolatedPosition()`), so the lyric moves
+  immediately rather than on the next tick. Skipped while hidden, paused, or
+  without lyrics.
+
+The offset does not fix the tick's own latency: a line appears 0–0.5s after its
+timestamp (about 0.25s on average) on every song. Scheduling the next tick at the
+next line boundary would.
+
 ## LRCLIB
 
 Verified against the server source (github.com/tranxuanthang/lrclib, MIT):

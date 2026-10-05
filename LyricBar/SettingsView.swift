@@ -37,6 +37,28 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Section {
+                LabeledContent(String(localized: "Lyric timing")) {
+                    HStack {
+                        Text(offsetDescription)
+                            .monospacedDigit()
+                        Stepper(String(localized: "Lyric timing"),
+                                value: $model.lyricOffset,
+                                in: -PlaybackModel.offsetLimit...PlaybackModel.offsetLimit,
+                                step: PlaybackModel.offsetStep)
+                            .labelsHidden()
+                    }
+                }
+                HStack {
+                    Spacer()
+                    Button(String(localized: "Reset")) { model.lyricOffset = 0 }
+                        .disabled(model.lyricOffset == 0)
+                }
+            } footer: {
+                Text(String(localized: "Moves the lyrics earlier or later for this song only. LyricBar remembers it."))
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!model.hasSyncedLyrics || model.isHidden)
+            Section {
                 Toggle(String(localized: "Open at Login"), isOn: $model.loginEnabled)
                     .disabled(!model.loginSupported)
             }
@@ -51,6 +73,14 @@ struct SettingsView: View {
             guard !Task.isCancelled, !dragging else { return }
             commit()
         }
+    }
+
+    private var offsetDescription: String {
+        let offset = model.lyricOffset
+        let amount = abs(offset).formatted(.number.precision(.fractionLength(2)))
+        if offset > 0 { return String(localized: "\(amount) s earlier") }
+        if offset < 0 { return String(localized: "\(amount) s later") }
+        return String(localized: "In sync")
     }
 
     private func commit() {

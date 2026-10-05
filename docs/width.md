@@ -32,8 +32,8 @@ across displays.
 ### Settings
 
 The menu's **Settings…** (⌘,) toggles an `ItemPopover` (an `NSPopover` anchored
-to the status item button) hosting `SettingsView`: the width slider and the
-**Open at Login** toggle. A popover rather than a
+to the status item button) hosting `SettingsView`: the width slider, the
+**Lyric timing** stepper, and the **Open at Login** toggle. A popover rather than a
 window: an `LSUIElement` app has no app menu, the SwiftUI `Settings` scene can
 only be opened from an `NSMenu` through a private selector, and a window would
 need its own activation and focus handling for a single slider. The popover is
@@ -46,6 +46,12 @@ click change. Applying every step live moved the item, and with it the popover
 and the knob, out from under the cursor; with a lyric playing the slider was
 uncontrollable. The pt label follows the draft. `widthPreference`'s setter snaps
 and persists. With only one available rung the slider is omitted.
+
+The **Lyric timing** stepper ([lyrics.md](lyrics.md#per-track-timing-offset))
+commits on every click, with no draft: an offset changes which line shows, not
+the item's geometry, so nothing moves under the cursor. Its **Reset** button is
+always present and only disabled at 0, so the popover never changes height. The
+section is disabled while lyrics are hidden or the song has no synced lyrics.
 
 ### Migration
 

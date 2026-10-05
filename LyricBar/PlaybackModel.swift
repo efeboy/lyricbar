@@ -51,6 +51,26 @@ final class PlaybackModel {
         }
     }
 
+    private(set) var hasSyncedLyrics = false
+
+    var lyricOffset: Double {
+        get { storedOffset }
+        set {
+            guard let trackID = currentTrackID else { return }
+            let clamped = min(max(newValue, -Self.offsetLimit), Self.offsetLimit)
+            let offset = (clamped / Self.offsetStep).rounded() * Self.offsetStep
+            guard offset != storedOffset else { return }
+            var offsets = storedOffsets
+            offsets[trackID] = offset == 0 ? nil : offset
+            defaults.set(offsets, forKey: Keys.offsets)
+            storedOffset = offset
+            applyOffset()
+        }
+    }
+
+    static let offsetStep = 0.25
+    static let offsetLimit = 10.0
+
     var isHidden: Bool {
         get { hidden }
         set {
@@ -94,6 +114,7 @@ final class PlaybackModel {
 
     private var chunk = ""
     private var storedWidth: CGFloat
+    private var storedOffset: Double = 0
     private var hidden = false
     private var loginRegistered = LoginItem.isEnabled
 
@@ -136,6 +157,7 @@ final class PlaybackModel {
 
     private enum Keys {
         static let width = "lyricWidthPoints"
+        static let offsets = "lyricOffsets"
         static let legacyBand = "lyricWidth"
         static let legacyFitPrefix = "fittedBox."
         static let legacySlack = "fitSlack"
@@ -201,6 +223,16 @@ final class PlaybackModel {
         guard width != lyricBoxWidth else { return }
         lyricBoxWidth = width
         rebuildMenuLines()
+    }
+
+    private var storedOffsets: [String: Double] {
+        defaults.dictionary(forKey: Keys.offsets) as? [String: Double] ?? [:]
+    }
+
+    private func applyOffset() {
+        guard !hidden, !lines.isEmpty, let position = extrapolatedPosition() else { return }
+        updateMenuLine(at: position + storedOffset)
+        updatePopoverLines(at: position + storedOffset)
     }
 
     private func observeScreenChanges() {
@@ -280,6 +312,7 @@ final class PlaybackModel {
         if snapshot.trackID != currentTrackID {
             currentTrackID = snapshot.trackID
             clear()
+            storedOffset = storedOffsets[snapshot.trackID] ?? 0
             trackDuration = snapshot.durationSeconds
             show(snapshot)
             header = Self.loadingHeader
@@ -303,8 +336,8 @@ final class PlaybackModel {
 
         guard let position = await position(from: bridge, probing: probeMetadata),
               !hidden, snapshot.trackID == currentTrackID else { return }
-        updateMenuLine(at: position)
-        updatePopoverLines(at: position)
+        updateMenuLine(at: position + storedOffset)
+        updatePopoverLines(at: position + storedOffset)
     }
 
     private func position(from bridge: PlaybackBridge, probing: Bool) async -> Double? {
@@ -312,6 +345,10 @@ final class PlaybackModel {
             positionSample = (probed, clock.now)
             return probed
         }
+        return extrapolatedPosition()
+    }
+
+    private func extrapolatedPosition() -> Double? {
         guard let sample = positionSample else { return nil }
         return sample.position + sample.at.duration(to: clock.now).seconds
     }
@@ -415,6 +452,8 @@ final class PlaybackModel {
         shownMenuLine = nil
         shownLyricLine = nil
         fetching = false
+        storedOffset = 0
+        hasSyncedLyrics = false
         chunk = ""
         previousLine = ""
         currentLine = ""
@@ -458,6 +497,7 @@ final class PlaybackModel {
                 case .synced(let parsed):
                     self.fetching = false
                     self.lines = parsed
+                    self.hasSyncedLyrics = true
                     self.rebuildMenuLines()
                     self.shownLyricLine = nil
                     if !self.hidden { self.header = Self.trackHeader(title: title, artist: artist) }
@@ -465,6 +505,7 @@ final class PlaybackModel {
                 case .unavailable:
                     self.fetching = false
                     self.lines = []
+                    self.hasSyncedLyrics = false
                     self.menuLines = []
                     self.shownMenuLine = nil
                     if !self.hidden {

@@ -74,7 +74,7 @@ Each is explained in `docs/`; breaking one has shipped a bug before.
 
 ```sh
 open LyricBar.xcodeproj                                          # ⌘R to run
-xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test     # 73 tests
+xcodebuild -project LyricBar.xcodeproj -scheme LyricBar test     # 78 tests
 ```
 
 A passing test run does not prove the menu bar item works. For anything visible,

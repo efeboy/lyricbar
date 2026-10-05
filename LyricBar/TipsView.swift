@@ -9,6 +9,7 @@ struct TipsView: View {
             ("command", String(localized: "Hold ⌘ and drag the lyric to move it along the menu bar.")),
             ("chevron.left.2", String(localized: "If the lyric disappears, the menu bar is full. Click the arrow beside the notch, or pick a narrower width in Settings.")),
             ("eye.slash", String(localized: "⌘P hides the lyric without quitting. Choose Show Lyrics to bring it back.")),
+            ("clock.arrow.2.circlepath", String(localized: "If the lyrics run early or late on a song, adjust Lyric timing in Settings. LyricBar remembers it for that song.")),
             ("music.note", String(localized: "♪ means there is nothing to sing right now: an instrumental part, a pause, or a song without synced lyrics.")),
         ]
     }

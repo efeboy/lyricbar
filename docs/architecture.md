@@ -12,7 +12,7 @@ Task.sleep(tick) → probeSources(): Spotify | Music (AppleScript) → track cha
         lines      ──→ previous / current / next triplet (unrendered) ←──────────┤
         menuLines  ──→ LyricReflow.expand(width:) ──→ menu bar item ←────────────┘
 
-        player position ──→ LRCParser.index(at:) → lineText / currentLine
+        player position + lyricOffset ──→ LRCParser.index(at:) → lineText / currentLine
 ```
 
 The parsed lines are kept twice. `lines` is the original timing; `menuLines` is
@@ -27,9 +27,9 @@ screen layout rebuilds only `menuLines`.
 | `LyricBarApp.swift` | `App` entry point. An empty `Settings` scene (required by `App`) and an `AppDelegate` that creates the model and the controller, then calls `model.start()`. |
 | `StatusItemController.swift` | Owns the `NSStatusItem`: sets `length`, hosts `LyricLabel`, pops up the menu on click and builds it as its own `NSMenuDelegate`, and re-renders via `withObservationTracking`. |
 | `LyricLabel.swift` | The SwiftUI view that draws the lyric, and `PassthroughHostingView`, which hosts it inside the status item button. |
-| `PlaybackModel.swift` | `@MainActor @Observable`. The poll loop, source selection, position extrapolation, the per-track fetch, the update check, the width preference and screen-change re-snapping. |
+| `PlaybackModel.swift` | `@MainActor @Observable`. The poll loop, source selection, position extrapolation, the per-track fetch, the update check, the width preference and screen-change re-snapping, and the per-track timing offset. |
 | `ItemPopover.swift` | An `NSPopover` anchored to the item; used for Settings and Tips. |
-| `SettingsView.swift` | The width slider and Open at Login. See [width.md](width.md). |
+| `SettingsView.swift` | The width slider, the lyric timing stepper, and Open at Login. See [width.md](width.md) and [lyrics.md](lyrics.md#per-track-timing-offset). |
 | `TipsView.swift` | Usage tips shown from **Tips…**. |
 | `MenuHeader.swift` | The wrapping SwiftUI header row of the menu. See [menu-bar-item.md](menu-bar-item.md#the-menu). |
 | `MenuBarMetrics.swift` | Text measurement, `menuWidth`, `WidthLadder`, screen geometry. |
